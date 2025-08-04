@@ -1403,9 +1403,9 @@
                         <var name="greenfrac"/>
                         <var name="lai12m"/>
 			<var name="cldfrac"/>
-			<var name="re_cloud" packages="mp_thompson_in;mp_wsm6_in;mp_tempo_in"/>
-			<var name="re_ice" packages="mp_thompson_in;mp_wsm6_in;mp_tempo_in"/>
-			<var name="re_snow" packages="mp_thompson_in;mp_wsm6_in;mp_tempo_in"/>
+			<var name="re_cloud"/>
+			<var name="re_ice"/>
+			<var name="re_snow"/>
                         <var name="nwfa2d"/>
                         <var name="nifa2d"/>
                         <var name="nt_c"/>
@@ -1606,12 +1606,12 @@
                         <var name="rnwfablten"/>
                         <var name="rthratensw"/>
                         <var name="rthratenlw"/>
-                        <var name="vcpool" packages="cu_grell_freitas_in"/>
-                        <var name="sub3d_rthcuten" packages="cu_grell_freitas_in"/>
-                        <var name="sub3d_rqvcuten" packages="cu_grell_freitas_in"/>
-                        <var name="sub3d_rucuten" packages="cu_grell_freitas_in"/>
-                        <var name="sub3d_rvcuten" packages="cu_grell_freitas_in"/>
-                        <var name="sigma_deep" packages="cu_grell_freitas_in"/>
+                        <var name="vcpool"/>
+                        <var name="sub3d_rthcuten"/>
+                        <var name="sub3d_rqvcuten"/>
+                        <var name="sub3d_rucuten"/>
+                        <var name="sub3d_rvcuten"/>
+                        <var name="sigma_deep"/>
                         <var name="smcrel"/>
                         <var name="t_oml"/>
                         <var name="t_oml_initial"/>
