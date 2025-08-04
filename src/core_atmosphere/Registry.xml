@@ -369,6 +369,11 @@
                      units="-"
                      description="Whether to re-compute coupled fields $\theta_m$, $\tilde{\rho}$, $\rho u$, etc. from uncoupled fields when restarting the model; used for cycling DA experiments that analyze uncoupled fields in restart files"
                      possible_values=".true. or .false."/>
+
+                <nml_option name="config_do_cycling" type="logical" default_value="false"
+                     units="-"
+                     description="Whether this run of the model is to warm start from a previous mpasout output; it has no effect when config_do_DAcycling is true"
+                     possible_values=".true. or .false."/>
         </nml_record>
 
         <nml_record name="printout" in_defaults="true">
