@@ -45,7 +45,8 @@ module mpas_stream_manager
               MPAS_stream_mgr_stream_exists, &
               MPAS_stream_mgr_get_stream_interval, &
               MPAS_get_stream_filename, &
-              MPAS_build_stream_filename
+              MPAS_build_stream_filename, &
+              get_output_interval_from_timelevels
 
     !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     !
@@ -6118,6 +6119,84 @@ module mpas_stream_manager
     end subroutine get_output_interval_from_timelevels!}}}
 
 
+    !|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
+    !
+    !  update_variable_output_alarm
+    !
+    !> \brief Update variable output alarm with new interval based on forecast hour
+    !> \author MPAS Development Team
+    !> \date February 2026
+    !> \details
+    !>  This routine updates a variable output alarm after it has rung by:
+    !>  1. Checking if the stream uses output_timelevels
+    !>  2. Calculating current forecast hour (current time - start time)
+    !>  3. Getting the next interval from get_output_interval_from_timelevels
+    !>  4. Removing the old alarm and creating a new one with the updated interval
+    !
+    !-----------------------------------------------------------------------
+    subroutine update_variable_output_alarm(manager, stream, alarm_name, ierr)!{{{
+
+        implicit none
+
+        type (MPAS_streamManager_type), pointer :: manager
+        type (MPAS_stream_list_type), pointer :: stream
+        character(len=*), intent(in) :: alarm_name
+        integer, intent(out), optional :: ierr
+
+        type (MPAS_Time_type) :: start_time, current_time, alarmTime_local
+        type (MPAS_TimeInterval_type) :: time_diff, alarmInterval_local
+        real (kind=RKIND) :: forecast_hour
+        integer :: interval_minutes, local_ierr, ierr_tmp
+        integer (kind=I8KIND) :: seconds_diff
+        character(len=StrKIND) :: timelevels_str
+
+        local_ierr = MPAS_STREAM_MGR_NOERR
+
+        ! Check if stream uses output_timelevels
+        timelevels_str = ''
+        call MPAS_stream_mgr_get_property(manager, trim(stream % name), &
+                                          MPAS_STREAM_PROPERTY_OUTPUT_TIMELEVELS, &
+                                          timelevels_str, ierr=ierr_tmp)
+
+        if (len_trim(timelevels_str) == 0) then
+            ! Not a variable output stream, nothing to do
+            if (present(ierr)) ierr = MPAS_STREAM_MGR_NOERR
+            return
+        end if
+
+        ! Calculate current forecast hour
+        start_time = mpas_get_clock_time(manager % streamClock, MPAS_START_TIME, ierr=ierr_tmp)
+        current_time = mpas_get_clock_time(manager % streamClock, MPAS_NOW, ierr=ierr_tmp)
+        time_diff = current_time - start_time
+        call mpas_get_timeInterval(time_diff, S=seconds_diff, ierr=ierr_tmp)
+        forecast_hour = real(seconds_diff, RKIND) / 3600.0_RKIND
+
+        ! Get next interval
+        call get_output_interval_from_timelevels(timelevels_str, forecast_hour, interval_minutes, ierr_tmp)
+        if (ierr_tmp /= MPAS_STREAM_MGR_NOERR) then
+            if (present(ierr)) ierr = ierr_tmp
+            return
+        end if
+
+        ! Convert minutes to time interval
+        call mpas_set_timeInterval(alarmInterval_local, M=interval_minutes, ierr=ierr_tmp)
+        local_ierr = ior(local_ierr, ierr_tmp)
+
+        ! Remove old alarm
+        call mpas_remove_clock_alarm(manager % streamClock, alarm_name, ierr=ierr_tmp)
+        local_ierr = ior(local_ierr, ierr_tmp)
+
+        ! Add new alarm with updated interval, starting from current time
+        alarmTime_local = current_time
+        call mpas_add_clock_alarm(manager % streamClock, alarm_name, alarmTime_local, &
+                                 alarmTimeInterval=alarmInterval_local, ierr=ierr_tmp)
+        local_ierr = ior(local_ierr, ierr_tmp)
+
+        if (present(ierr)) ierr = local_ierr
+
+    end subroutine update_variable_output_alarm!}}}
+
+
 end module mpas_stream_manager
 
 
@@ -6663,84 +6742,3 @@ subroutine stream_mgr_add_variable_output_alarm_c(manager_c, streamID_c, ierr_c)
     end if
 
 end subroutine stream_mgr_add_variable_output_alarm_c !} } }
-
-
-!***********************************************************************
-!
-!  routine update_variable_output_alarm
-!
-!> \brief   Update variable output alarm with new interval based on forecast hour
-!> \author  MPAS Development Team
-!> \date    May 2025
-!> \details 
-!>  This routine updates a variable output alarm after it has rung by:
-!>  1. Checking if the stream uses output_timelevels
-!>  2. Calculating current forecast hour (current time - start time)
-!>  3. Getting the next interval from get_output_interval_from_timelevels
-!>  4. Removing the old alarm and creating a new one with the updated interval
-!
-!-----------------------------------------------------------------------
-subroutine update_variable_output_alarm(manager, stream, alarm_name, ierr) !{{{
-    use mpas_timekeeping, only : mpas_get_clock_time, mpas_set_timeInterval, mpas_get_timeInterval, &
-                               mpas_remove_clock_alarm, mpas_add_clock_alarm, &
-                               MPAS_START_TIME, MPAS_NOW, operator(-)
-    
-    implicit none
-    
-    type (MPAS_streamManager_type), pointer :: manager
-    type (MPAS_stream_list_type), pointer :: stream
-    character(len=*), intent(in) :: alarm_name
-    integer, intent(out), optional :: ierr
-    
-    type (MPAS_Time_type) :: start_time, current_time, alarmTime_local
-    type (MPAS_TimeInterval_type) :: time_diff, alarmInterval_local
-    real (kind=RKIND) :: forecast_hour
-    integer :: interval_minutes, local_ierr, ierr_tmp
-    integer (kind=I8KIND) :: seconds_diff
-    character(len=StrKIND) :: timelevels_str
-    
-    local_ierr = MPAS_STREAM_MGR_NOERR
-    
-    ! Check if stream uses output_timelevels
-    timelevels_str = ''
-    call MPAS_stream_mgr_get_property(manager, trim(stream % name), &
-                                      MPAS_STREAM_PROPERTY_OUTPUT_TIMELEVELS, &
-                                      timelevels_str, ierr=ierr_tmp)
-    
-    if (len_trim(timelevels_str) == 0) then
-        ! Not a variable output stream, nothing to do
-        if (present(ierr)) ierr = MPAS_STREAM_MGR_NOERR
-        return
-    end if
-    
-    ! Calculate current forecast hour
-    start_time = mpas_get_clock_time(manager % streamClock, MPAS_START_TIME, ierr=ierr_tmp)
-    current_time = mpas_get_clock_time(manager % streamClock, MPAS_NOW, ierr=ierr_tmp)
-    time_diff = current_time - start_time
-    call mpas_get_timeInterval(time_diff, S=seconds_diff, ierr=ierr_tmp)
-    forecast_hour = real(seconds_diff, RKIND) / 3600.0_RKIND
-    
-    ! Get next interval
-    call get_output_interval_from_timelevels(timelevels_str, forecast_hour, interval_minutes, ierr_tmp)
-    if (ierr_tmp /= MPAS_STREAM_MGR_NOERR) then
-        if (present(ierr)) ierr = ierr_tmp
-        return
-    end if
-    
-    ! Convert minutes to time interval
-    call mpas_set_timeInterval(alarmInterval_local, M=interval_minutes, ierr=ierr_tmp)
-    local_ierr = ior(local_ierr, ierr_tmp)
-    
-    ! Remove old alarm
-    call mpas_remove_clock_alarm(manager % streamClock, alarm_name, ierr=ierr_tmp)
-    local_ierr = ior(local_ierr, ierr_tmp)
-    
-    ! Add new alarm with updated interval, starting from current time
-    alarmTime_local = current_time
-    call mpas_add_clock_alarm(manager % streamClock, alarm_name, alarmTime_local, &
-                             alarmTimeInterval=alarmInterval_local, ierr=ierr_tmp)
-    local_ierr = ior(local_ierr, ierr_tmp)
-    
-    if (present(ierr)) ierr = local_ierr
-
-end subroutine update_variable_output_alarm !}}}
