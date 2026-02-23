@@ -1495,6 +1495,9 @@ void xml_stream_parser(char *fname, void *manager, int *mpi_comm, int *status)
 				/* If output interval is an interval (i.e. not initial_only/final_only or none) set filename_interval to the interval. */
 				} else if ( interval_out && strstr(interval_out, "initial_only") == NULL && strstr(interval_out, "final_only") == NULL && strstr(interval_out, "none") == NULL ){
 					filename_interval = interval_out2;
+				/* If output_timelevels is set, use 'output' to get unique filename for each write */
+				} else if ( output_timelevels != NULL ) {
+					filename_interval = "output";
 				}
 			/* Check for an input stream. */
 			} else if ( strstr(direction, "input") != NULL ) {
@@ -1505,6 +1508,9 @@ void xml_stream_parser(char *fname, void *manager, int *mpi_comm, int *status)
 			} else if ( strstr(direction, "output") != NULL ) {
 				if ( interval_out && strstr(interval_out, "initial_only") == NULL && strstr(interval_out, "final_only") == NULL && strstr(interval_out, "none") == NULL ){
 					filename_interval = interval_out2;
+				/* If output_timelevels is set, use 'output' to get unique filename for each write */
+				} else if ( output_timelevels != NULL ) {
+					filename_interval = "output";
 				}
 			}
 		} else {

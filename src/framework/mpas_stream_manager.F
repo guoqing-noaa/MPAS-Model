@@ -3220,7 +3220,11 @@ module mpas_stream_manager
            ! stream, in which case we create the stream from scratch
            !
            if (.not. stream % valid) then
-               if ( stream % filename_interval /= 'none' ) then
+               if ( stream % filename_interval == 'output' ) then
+                   ! Use actual write time for filename (each output gets unique file)
+                   call mpas_get_time(writeTime, dateTimeString=time_string)
+                   call mpas_expand_string(time_string, blockID, stream % filename_template, stream % filename)
+               else if ( stream % filename_interval /= 'none' ) then
                    call mpas_set_timeInterval(filename_interval, timeString=stream % filename_interval)
                    call mpas_build_stream_filename(stream % referenceTime, writeTime, filename_interval, stream % filename_template, blockID, stream % filename, ierr=local_ierr)
                else
@@ -3295,7 +3299,11 @@ module mpas_stream_manager
 
                stream % valid = .true.
            else
-               if ( stream % filename_interval /= 'none' ) then
+               if ( stream % filename_interval == 'output' ) then
+                   ! Use actual write time for filename (each output gets unique file)
+                   call mpas_get_time(writeTime, dateTimeString=time_string)
+                   call mpas_expand_string(time_string, blockID, stream % filename_template, temp_filename)
+               else if ( stream % filename_interval /= 'none' ) then
                    call mpas_set_timeInterval(filename_interval, timeString=stream % filename_interval)
                    call mpas_build_stream_filename(stream % referenceTime, writeTime, filename_interval, stream % filename_template, blockID, temp_filename, ierr=local_ierr)
                else
@@ -3726,7 +3734,10 @@ module mpas_stream_manager
            !
            ! First we need to build the filename for the current read time.
            !
-           if ( stream % filename_interval /= 'none' ) then
+           if ( stream % filename_interval == 'output' ) then
+               ! Use actual read time for filename
+               call mpas_expand_string(when, blockID_local, stream % filename_template, temp_filename)
+           else if ( stream % filename_interval /= 'none' ) then
                call mpas_set_time(now_time, dateTimeString=when, ierr=local_ierr)
 
                call mpas_set_timeInterval(filename_interval, timeString=stream % filename_interval)
