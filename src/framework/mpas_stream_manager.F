@@ -46,7 +46,8 @@ module mpas_stream_manager
               MPAS_stream_mgr_get_stream_interval, &
               MPAS_get_stream_filename, &
               MPAS_build_stream_filename, &
-              get_output_interval_from_timelevels
+              get_output_interval_from_timelevels, &
+              get_next_timelevel_start
 
     !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
     !
@@ -3106,8 +3107,8 @@ module mpas_stream_manager
         integer, intent(out) :: ierr
 
         type (MPAS_stream_list_type), pointer :: alarm_cursor
-        type (MPAS_Time_type) :: ref_time, start_time, current_time
-        type (MPAS_TimeInterval_type) :: temp_interval, time_diff
+        type (MPAS_Time_type) :: ref_time, start_time, current_time, alarmTime_local
+        type (MPAS_TimeInterval_type) :: temp_interval, time_diff, alarmInterval_local
         type (MPAS_TimeInterval_type) :: filename_interval
         character (len=StrKIND) :: now_string, time_string
         character (len=StrKIND) :: temp_filename, actualWhen
@@ -3117,7 +3118,8 @@ module mpas_stream_manager
         integer :: maxRecords, tempRecord
         integer :: local_ierr, threadNum, interval_minutes
         integer (kind=I8KIND) :: seconds_diff
-        real (kind=RKIND) :: forecast_hour
+        real (kind=RKIND) :: forecast_hour, next_start_hour
+        integer :: next_interval_minutes
 
         threadNum = mpas_threading_get_thread_num()
 
@@ -3178,13 +3180,26 @@ module mpas_stream_manager
                ! Check if forecast hour is within any defined timelevel range
                call get_output_interval_from_timelevels(timelevels_str, forecast_hour, interval_minutes, local_ierr)
                if (local_ierr /= MPAS_STREAM_MGR_NOERR .or. interval_minutes <= 0) then
-                   ! Outside defined timelevels range - skip output and remove alarm
-                   STREAM_DEBUG_WRITE('-- Stream '//trim(stream % name)//' output skipped: forecast hour outside output_timelevels range.')
+                   ! Outside defined timelevels range - check if there's a future range to schedule
+                   call get_next_timelevel_start(timelevels_str, forecast_hour, next_start_hour, next_interval_minutes, local_ierr)
+                   
                    alarm_cursor => stream % alarmList_out % head
                    do while (associated(alarm_cursor))
                        if (mpas_is_alarm_ringing(manager % streamClock, alarm_cursor % name, ierr=local_ierr)) then
                            call mpas_reset_clock_alarm(manager % streamClock, alarm_cursor % name, ierr=local_ierr)
                            call mpas_remove_clock_alarm(manager % streamClock, alarm_cursor % name, ierr=local_ierr)
+                           
+                           ! If there's a future range, schedule alarm for when it starts
+                           if (next_start_hour > 0.0_RKIND) then
+                               STREAM_DEBUG_WRITE('-- Stream '//trim(stream % name)//' rescheduling alarm for next timelevel range.')
+                               call mpas_set_timeInterval(time_diff, H=int(next_start_hour), ierr=local_ierr)
+                               alarmTime_local = start_time + time_diff
+                               call mpas_set_timeInterval(alarmInterval_local, M=next_interval_minutes, ierr=local_ierr)
+                               call mpas_add_clock_alarm(manager % streamClock, alarm_cursor % name, alarmTime_local, &
+                                                        alarmTimeInterval=alarmInterval_local, ierr=local_ierr)
+                           else
+                               STREAM_DEBUG_WRITE('-- Stream '//trim(stream % name)//' output complete: past all output_timelevels ranges.')
+                           end if
                        end if
                        alarm_cursor => alarm_cursor % next
                    end do
@@ -6209,6 +6224,87 @@ module mpas_stream_manager
 
     !|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
     !
+    !  get_next_timelevel_start
+    !
+    !> \brief Find the start hour of the next timelevel range after current forecast hour
+    !> \author MPAS Development Team
+    !> \date February 2026
+    !> \details
+    !>  Given a time levels string and current forecast hour, finds the start hour
+    !>  of the next timelevel range (if any). Returns -1 if no future ranges exist.
+    !
+    !-----------------------------------------------------------------------
+    subroutine get_next_timelevel_start(timelevels_str, forecast_hour, next_start_hour, next_interval_minutes, ierr)!{{{
+
+        implicit none
+
+        character(len=*), intent(in) :: timelevels_str
+        real(kind=RKIND), intent(in) :: forecast_hour
+        real(kind=RKIND), intent(out) :: next_start_hour
+        integer, intent(out) :: next_interval_minutes
+        integer, intent(out) :: ierr
+
+        character(len=StrKIND) :: work_str, segment
+        integer :: seg_start, seg_end, local_ierr, work_len
+        real(kind=RKIND) :: start_hour, end_hour, best_start
+        integer :: seg_interval_minutes, best_interval
+        logical :: found
+
+        ierr = 0
+        next_start_hour = -1.0_RKIND
+        next_interval_minutes = 60
+        best_start = huge(1.0_RKIND)
+        best_interval = 60
+        found = .false.
+        work_str = trim(adjustl(timelevels_str))
+        work_len = len_trim(work_str)
+
+        if (work_len == 0) then
+            ierr = 1
+            return
+        end if
+
+        ! Parse each space-separated segment
+        seg_start = 1
+        do while (seg_start <= work_len)
+            seg_end = seg_start
+            do while (seg_end <= work_len .and. work_str(seg_end:seg_end) /= ' ')
+                seg_end = seg_end + 1
+            end do
+            seg_end = seg_end - 1
+
+            if (seg_end >= seg_start) then
+                segment = work_str(seg_start:seg_end)
+                call parse_output_timelevel_spec(segment, start_hour, end_hour, seg_interval_minutes, local_ierr)
+
+                if (local_ierr == 0) then
+                    ! Check if this range starts after current forecast hour
+                    if (start_hour > forecast_hour .and. start_hour < best_start) then
+                        best_start = start_hour
+                        best_interval = seg_interval_minutes
+                        found = .true.
+                    end if
+                end if
+            end if
+
+            seg_start = seg_end + 1
+            do while (seg_start <= work_len .and. work_str(seg_start:seg_start) == ' ')
+                seg_start = seg_start + 1
+            end do
+        end do
+
+        if (found) then
+            next_start_hour = best_start
+            next_interval_minutes = best_interval
+        else
+            ierr = MPAS_STREAM_MGR_ERROR  ! No future ranges
+        end if
+
+    end subroutine get_next_timelevel_start!}}}
+
+
+    !|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
+    !
     !  update_variable_output_alarm
     !
     !> \brief Update variable output alarm with new interval based on forecast hour
@@ -6233,8 +6329,8 @@ module mpas_stream_manager
 
         type (MPAS_Time_type) :: start_time, current_time, alarmTime_local
         type (MPAS_TimeInterval_type) :: time_diff, alarmInterval_local
-        real (kind=RKIND) :: forecast_hour
-        integer :: interval_minutes, local_ierr, ierr_tmp
+        real (kind=RKIND) :: forecast_hour, next_start_hour
+        integer :: interval_minutes, local_ierr, ierr_tmp, next_interval_minutes
         integer (kind=I8KIND) :: seconds_diff
         character(len=StrKIND) :: timelevels_str
 
@@ -6262,8 +6358,18 @@ module mpas_stream_manager
         ! Get next interval
         call get_output_interval_from_timelevels(timelevels_str, forecast_hour, interval_minutes, ierr_tmp)
         if (ierr_tmp /= MPAS_STREAM_MGR_NOERR .or. interval_minutes <= 0) then
-            ! No more output needed - just remove the alarm and don't recreate it
+            ! Current hour not in any range - check for future range
+            call get_next_timelevel_start(timelevels_str, forecast_hour, next_start_hour, next_interval_minutes, ierr_tmp)
             call mpas_remove_clock_alarm(manager % streamClock, alarm_name, ierr=ierr_tmp)
+            
+            if (next_start_hour > 0.0_RKIND) then
+                ! Schedule alarm for when the next range starts
+                call mpas_set_timeInterval(time_diff, H=int(next_start_hour), ierr=ierr_tmp)
+                alarmTime_local = start_time + time_diff
+                call mpas_set_timeInterval(alarmInterval_local, M=next_interval_minutes, ierr=ierr_tmp)
+                call mpas_add_clock_alarm(manager % streamClock, alarm_name, alarmTime_local, &
+                                         alarmTimeInterval=alarmInterval_local, ierr=ierr_tmp)
+            end if
             if (present(ierr)) ierr = MPAS_STREAM_MGR_NOERR
             return
         end if
