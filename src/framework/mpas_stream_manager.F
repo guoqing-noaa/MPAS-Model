@@ -6138,7 +6138,7 @@ module mpas_stream_manager
 
         implicit none
 
-        type (MPAS_streamManager_type), pointer :: manager
+        type (MPAS_streamManager_type), intent(inout) :: manager
         type (MPAS_stream_list_type), pointer :: stream
         character(len=*), intent(in) :: alarm_name
         integer, intent(out), optional :: ierr
@@ -6168,7 +6168,7 @@ module mpas_stream_manager
         start_time = mpas_get_clock_time(manager % streamClock, MPAS_START_TIME, ierr=ierr_tmp)
         current_time = mpas_get_clock_time(manager % streamClock, MPAS_NOW, ierr=ierr_tmp)
         time_diff = current_time - start_time
-        call mpas_get_timeInterval(time_diff, S=seconds_diff, ierr=ierr_tmp)
+        call mpas_get_timeInterval(time_diff, S_i8=seconds_diff, ierr=ierr_tmp)
         forecast_hour = real(seconds_diff, RKIND) / 3600.0_RKIND
 
         ! Get next interval
