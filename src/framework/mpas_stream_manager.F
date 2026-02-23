@@ -6218,8 +6218,9 @@ module mpas_stream_manager
         call mpas_remove_clock_alarm(manager % streamClock, alarm_name, ierr=ierr_tmp)
         local_ierr = ior(local_ierr, ierr_tmp)
 
-        ! Add new alarm with updated interval, starting from current time
-        alarmTime_local = current_time
+        ! Add new alarm with updated interval
+        ! Set alarm time to current_time + interval so next ring is in the future
+        alarmTime_local = current_time + alarmInterval_local
         call mpas_add_clock_alarm(manager % streamClock, alarm_name, alarmTime_local, &
                                  alarmTimeInterval=alarmInterval_local, ierr=ierr_tmp)
         local_ierr = ior(local_ierr, ierr_tmp)
