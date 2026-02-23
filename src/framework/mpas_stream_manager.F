@@ -1458,6 +1458,7 @@ module mpas_stream_manager
 
         type (MPAS_stream_list_type), pointer :: stream
         type (MPAS_stream_list_type), pointer :: alarm_cursor
+        type (MPAS_stream_list_type), pointer :: stream_cursor
         integer :: local_direction
         integer :: local_ierr, threadNum
         logical :: resetAlarms
@@ -1507,6 +1508,8 @@ module mpas_stream_manager
                         do while (associated(alarm_cursor))
                             if (mpas_is_alarm_ringing(manager % streamClock, alarm_cursor % name, ierr=local_ierr)) then
                                 call mpas_reset_clock_alarm(manager % streamClock, alarm_cursor % name, ierr=local_ierr)
+                                ! Update variable output alarms with new interval based on forecast hour
+                                call update_variable_output_alarm(manager, stream, alarm_cursor % name, ierr=local_ierr)
                             end if
                             alarm_cursor => alarm_cursor % next
                         end do
@@ -1536,6 +1539,12 @@ module mpas_stream_manager
                     do while (associated(alarm_cursor))
                         if (mpas_is_alarm_ringing(manager % streamClock, alarm_cursor % name, ierr=local_ierr)) then
                             call mpas_reset_clock_alarm(manager % streamClock, alarm_cursor % name, ierr=local_ierr)
+                            ! Update variable output alarms for each stream associated with this alarm
+                            stream_cursor => alarm_cursor % streamList % head
+                            do while (associated(stream_cursor))
+                                call update_variable_output_alarm(manager, stream_cursor, alarm_cursor % name, ierr=local_ierr)
+                                stream_cursor => stream_cursor % next
+                            end do
                         end if
                         alarm_cursor => alarm_cursor % next
                     end do
@@ -1857,6 +1866,9 @@ module mpas_stream_manager
                    case (MPAS_STREAM_PROPERTY_FILENAME_INTV)
                        stream_cursor % filename_interval = propertyValue
 
+                   case (MPAS_STREAM_PROPERTY_OUTPUT_TIMELEVELS)
+                       stream_cursor % output_timelevels = propertyValue
+
                    case (MPAS_STREAM_PROPERTY_REF_TIME)
                        call mpas_set_time(stream_cursor % referenceTime, dateTimeString=propertyValue)
 
@@ -2083,6 +2095,9 @@ module mpas_stream_manager
 
             case (MPAS_STREAM_PROPERTY_FILENAME_INTV)
                 propertyValue = stream_cursor % filename_interval
+
+            case (MPAS_STREAM_PROPERTY_OUTPUT_TIMELEVELS)
+                propertyValue = stream_cursor % output_timelevels
 
             case (MPAS_STREAM_PROPERTY_REF_TIME)
                 call mpas_get_time(stream_cursor % referenceTime, dateTimeString=propertyValue)
@@ -5922,6 +5937,187 @@ module mpas_stream_manager
     end function MPAS_stream_mgr_stream_exists!}}}
 
 
+    !|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
+    !
+    !  parse_output_timelevel_spec
+    !
+    !> \brief Parse one time level specification segment
+    !> \author Guoqing Wang
+    !> \date February 2026
+    !> \details
+    !>  Parses a single segment like "0-3-15m" or "4-72" into start hour, end hour, and interval
+    !>  Format: start_hour-end_hour-interval[unit]
+    !>  Unit can be 'm' for minutes, 'h' or omitted for hours
+    !
+    !-----------------------------------------------------------------------
+    subroutine parse_output_timelevel_spec(spec, start_hour, end_hour, interval_minutes, ierr)!{{{
+
+        implicit none
+
+        character(len=*), intent(in) :: spec
+        real(kind=RKIND), intent(out) :: start_hour, end_hour
+        integer, intent(out) :: interval_minutes
+        integer, intent(out) :: ierr
+
+        character(len=StrKIND) :: spec_local, token
+        integer :: i, dash_count, dash_pos(2), len_spec, read_err
+        real(kind=RKIND) :: interval_value
+        character :: unit_char
+
+        ierr = 0
+        spec_local = trim(adjustl(spec))
+        len_spec = len_trim(spec_local)
+
+        ! Count dashes to determine format
+        dash_count = 0
+        do i = 1, len_spec
+            if (spec_local(i:i) == '-') then
+                dash_count = dash_count + 1
+                if (dash_count <= 2) dash_pos(dash_count) = i
+            end if
+        end do
+
+        ! Parse based on number of dashes
+        if (dash_count == 1) then
+            ! Format: start-end (interval defaults to 1 hour = 60 minutes)
+            read(spec_local(1:dash_pos(1)-1), *, iostat=read_err) start_hour
+            if (read_err /= 0) then
+                ierr = 1
+                return
+            end if
+            read(spec_local(dash_pos(1)+1:len_spec), *, iostat=read_err) end_hour
+            if (read_err /= 0) then
+                ierr = 1
+                return
+            end if
+            interval_minutes = 60
+
+        else if (dash_count == 2) then
+            ! Format: start-end-interval[unit]
+            read(spec_local(1:dash_pos(1)-1), *, iostat=read_err) start_hour
+            if (read_err /= 0) then
+                ierr = 1
+                return
+            end if
+            read(spec_local(dash_pos(1)+1:dash_pos(2)-1), *, iostat=read_err) end_hour
+            if (read_err /= 0) then
+                ierr = 1
+                return
+            end if
+
+            token = spec_local(dash_pos(2)+1:len_spec)
+            unit_char = token(len_trim(token):len_trim(token))
+
+            if (unit_char == 'm' .or. unit_char == 'M') then
+                ! Interval in minutes
+                read(token(1:len_trim(token)-1), *, iostat=read_err) interval_value
+                if (read_err /= 0) then
+                    ierr = 1
+                    return
+                end if
+                interval_minutes = int(interval_value)
+            else if (unit_char == 'h' .or. unit_char == 'H') then
+                ! Interval in hours (explicit)
+                read(token(1:len_trim(token)-1), *, iostat=read_err) interval_value
+                if (read_err /= 0) then
+                    ierr = 1
+                    return
+                end if
+                interval_minutes = int(interval_value * 60.0)
+            else
+                ! No unit or digit at end, assume hours
+                read(token, *, iostat=read_err) interval_value
+                if (read_err /= 0) then
+                    ierr = 1
+                    return
+                end if
+                interval_minutes = int(interval_value * 60.0)
+            end if
+
+        else
+            ! Invalid format
+            ierr = 1
+            return
+        end if
+
+    end subroutine parse_output_timelevel_spec!}}}
+
+
+    !|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
+    !
+    !  get_output_interval_from_timelevels
+    !
+    !> \brief Calculate output interval based on current forecast hour and timelevels
+    !> \author Guoqing Wang
+    !> \date February 2026
+    !> \details
+    !>  Given a time levels string and current forecast hour, determines the appropriate
+    !>  output interval in minutes
+    !
+    !-----------------------------------------------------------------------
+    subroutine get_output_interval_from_timelevels(timelevels_str, forecast_hour, interval_minutes, ierr)!{{{
+
+        implicit none
+
+        character(len=*), intent(in) :: timelevels_str
+        real(kind=RKIND), intent(in) :: forecast_hour
+        integer, intent(out) :: interval_minutes
+        integer, intent(out) :: ierr
+
+        character(len=StrKIND) :: work_str, segment
+        integer :: seg_start, seg_end, i, local_ierr
+        real(kind=RKIND) :: start_hour, end_hour
+        integer :: seg_interval_minutes
+        logical :: found
+
+        ierr = 0
+        interval_minutes = 60  ! Default to 1 hour
+        found = .false.
+        work_str = trim(adjustl(timelevels_str))
+
+        ! Parse each space-separated segment
+        seg_start = 1
+        do while (seg_start <= len_trim(work_str))
+            ! Find end of current segment (next space or end of string)
+            seg_end = seg_start
+            do while (seg_end <= len_trim(work_str) .and. work_str(seg_end:seg_end) /= ' ')
+                seg_end = seg_end + 1
+            end do
+            seg_end = seg_end - 1
+
+            if (seg_end >= seg_start) then
+                segment = work_str(seg_start:seg_end)
+                call parse_output_timelevel_spec(segment, start_hour, end_hour, seg_interval_minutes, local_ierr)
+
+                if (local_ierr == 0) then
+                    ! Check if current forecast hour falls in this range
+                    if (forecast_hour >= start_hour .and. forecast_hour <= end_hour) then
+                        interval_minutes = seg_interval_minutes
+                        found = .true.
+                        exit
+                    end if
+                else
+                    ierr = 1
+                    return
+                end if
+            end if
+
+            ! Move to next segment
+            seg_start = seg_end + 1
+            do while (seg_start <= len_trim(work_str) .and. work_str(seg_start:seg_start) == ' ')
+                seg_start = seg_start + 1
+            end do
+        end do
+
+        ! If no matching range found, use the last segment's interval as default
+        if (.not. found .and. ierr == 0) then
+            ! Could optionally warn here
+            ! For now, interval_minutes keeps its last parsed value or default
+        end if
+
+    end subroutine get_output_interval_from_timelevels!}}}
+
+
 end module mpas_stream_manager
 
 
@@ -6342,3 +6538,209 @@ subroutine stream_mgr_add_pkg_c(manager_c, streamID_c, package_c, ierr_c) bind(c
     end if
 
 end subroutine stream_mgr_add_pkg_c !}}}
+
+
+subroutine stream_mgr_set_property_c(manager_c, streamID_c, propertyName_c, propertyValue_c, ierr_c) bind(c) !{ { {
+
+    use mpas_c_interfacing, only : mpas_c_to_f_string
+    use iso_c_binding, only : c_char, c_int, c_ptr, c_f_pointer
+    use mpas_derived_types, only : MPAS_streamManager_type, MPAS_STREAM_MGR_NOERR, &
+                                   MPAS_STREAM_PROPERTY_OUTPUT_TIMELEVELS
+    use mpas_stream_manager, only : MPAS_stream_mgr_set_property
+    use mpas_kind_types, only : StrKIND
+
+    implicit none
+
+    type (c_ptr) :: manager_c
+    character(kind=c_char) :: streamID_c(*)
+    character(kind=c_char) :: propertyName_c(*)
+    character(kind=c_char) :: propertyValue_c(*)
+    integer(kind=c_int) :: ierr_c
+
+    type (MPAS_streamManager_type), pointer :: manager
+    character(len=StrKIND) :: streamID, propertyName, propertyValue
+    integer :: ierr
+
+
+    ierr = 0
+
+    call c_f_pointer(manager_c, manager)
+    call mpas_c_to_f_string(streamID_c, streamID)
+    call mpas_c_to_f_string(propertyName_c, propertyName)
+    call mpas_c_to_f_string(propertyValue_c, propertyValue)
+
+    ! Map property name string to constant
+    if (trim(propertyName) == 'output_timelevels') then
+        call MPAS_stream_mgr_set_property(manager, streamID, MPAS_STREAM_PROPERTY_OUTPUT_TIMELEVELS, propertyValue, ierr=ierr)
+    end if
+
+    if (ierr == MPAS_STREAM_MGR_NOERR) then
+        ierr_c = 0
+    else
+        ierr_c = 1
+    end if
+
+end subroutine stream_mgr_set_property_c !} } }
+
+
+subroutine stream_mgr_add_variable_output_alarm_c(manager_c, streamID_c, ierr_c) bind(c) !{ { {
+
+    use mpas_c_interfacing, only : mpas_c_to_f_string
+    use iso_c_binding, only : c_char, c_int, c_ptr, c_f_pointer
+    use mpas_derived_types, only : MPAS_streamManager_type, MPAS_Clock_type, MPAS_Time_type, MPAS_TimeInterval_type, &
+                                   MPAS_STREAM_MGR_NOERR, MPAS_STREAM_OUTPUT, MPAS_START_TIME, &
+                                   MPAS_STREAM_PROPERTY_OUTPUT_TIMELEVELS, MPAS_STREAM_PROPERTY_REF_TIME
+    use mpas_stream_manager, only : MPAS_stream_mgr_get_clock, MPAS_stream_mgr_add_alarm, &
+                                    MPAS_stream_mgr_get_property, get_output_interval_from_timelevels
+    use mpas_kind_types, only : StrKIND, RKIND
+    use mpas_timekeeping, only : mpas_add_clock_alarm, mpas_get_clock_time, mpas_set_time, mpas_set_timeInterval, &
+                                 mpas_get_timeInterval, operator(-)
+
+    implicit none
+
+    type (c_ptr) :: manager_c
+    character(kind=c_char) :: streamID_c(*)
+    integer(kind=c_int) :: ierr_c
+
+    type (MPAS_streamManager_type), pointer :: manager
+    type (MPAS_Clock_type), pointer :: clock
+    character(len=StrKIND) :: streamID, alarmID, timelevels_str, ref_time_str
+    type (MPAS_Time_type) :: alarmTime_local, ref_time, current_time
+    type (MPAS_TimeInterval_type) :: alarmInterval_local, time_since_ref
+    integer :: ierr, ierr_tmp, interval_minutes
+    real(kind=RKIND) :: forecast_hour
+
+
+    ierr = 0
+    ierr_tmp = 0
+
+    call c_f_pointer(manager_c, manager)
+    call mpas_c_to_f_string(streamID_c, streamID)
+    write(alarmID, '(a)') trim(streamID)//'_output'
+
+    ! Get the output_timelevels property
+    call MPAS_stream_mgr_get_property(manager, streamID, MPAS_STREAM_PROPERTY_OUTPUT_TIMELEVELS, timelevels_str, ierr=ierr_tmp)
+    ierr = ior(ierr, ierr_tmp)
+
+    if (ierr /= 0 .or. trim(timelevels_str) == '') then
+        ierr_c = 1
+        return
+    end if
+
+    call MPAS_stream_mgr_get_clock(manager, clock)
+
+    ! Get reference time for the stream
+    call MPAS_stream_mgr_get_property(manager, streamID, MPAS_STREAM_PROPERTY_REF_TIME, ref_time_str, ierr=ierr_tmp)
+    ierr = ior(ierr, ierr_tmp)
+    call mpas_set_time(ref_time, dateTimeString=ref_time_str, ierr=ierr_tmp)
+    ierr = ior(ierr, ierr_tmp)
+
+    ! For initial alarm, set it to start time (forecast hour 0)
+    alarmTime_local = mpas_get_clock_time(clock, MPAS_START_TIME, ierr=ierr_tmp)
+    ierr = ior(ierr, ierr_tmp)
+
+    ! Get interval for first output (at forecast hour 0)
+    forecast_hour = 0.0_RKIND
+    call get_output_interval_from_timelevels(timelevels_str, forecast_hour, interval_minutes, ierr_tmp)
+    ierr = ior(ierr, ierr_tmp)
+
+    ! Convert minutes to time interval
+    call mpas_set_timeInterval(alarmInterval_local, M=interval_minutes, ierr=ierr_tmp)
+    ierr = ior(ierr, ierr_tmp)
+
+    ! Add the alarm
+    call mpas_add_clock_alarm(clock, alarmID, alarmTime_local, alarmTimeInterval=alarmInterval_local, ierr=ierr_tmp)
+    ierr = ior(ierr, ierr_tmp)
+
+    ! Register alarm with stream manager
+    call MPAS_stream_mgr_add_alarm(manager, streamID, alarmID, MPAS_STREAM_OUTPUT, ierr=ierr_tmp)
+    ierr = ior(ierr, ierr_tmp)
+
+    if (ierr == MPAS_STREAM_MGR_NOERR) then
+        ierr_c = 0
+    else
+        ierr_c = 1
+    end if
+
+end subroutine stream_mgr_add_variable_output_alarm_c !} } }
+
+
+!***********************************************************************
+!
+!  routine update_variable_output_alarm
+!
+!> \brief   Update variable output alarm with new interval based on forecast hour
+!> \author  MPAS Development Team
+!> \date    May 2025
+!> \details 
+!>  This routine updates a variable output alarm after it has rung by:
+!>  1. Checking if the stream uses output_timelevels
+!>  2. Calculating current forecast hour (current time - start time)
+!>  3. Getting the next interval from get_output_interval_from_timelevels
+!>  4. Removing the old alarm and creating a new one with the updated interval
+!
+!-----------------------------------------------------------------------
+subroutine update_variable_output_alarm(manager, stream, alarm_name, ierr) !{{{
+    use mpas_timekeeping, only : mpas_get_clock_time, mpas_set_timeInterval, mpas_get_timeInterval, &
+                               mpas_remove_clock_alarm, mpas_add_clock_alarm, &
+                               MPAS_START_TIME, MPAS_NOW, operator(-)
+    
+    implicit none
+    
+    type (MPAS_streamManager_type), pointer :: manager
+    type (MPAS_stream_list_type), pointer :: stream
+    character(len=*), intent(in) :: alarm_name
+    integer, intent(out), optional :: ierr
+    
+    type (MPAS_Time_type) :: start_time, current_time, alarmTime_local
+    type (MPAS_TimeInterval_type) :: time_diff, alarmInterval_local
+    real (kind=RKIND) :: forecast_hour
+    integer :: interval_minutes, local_ierr, ierr_tmp
+    integer (kind=I8KIND) :: seconds_diff
+    character(len=StrKIND) :: timelevels_str
+    
+    local_ierr = MPAS_STREAM_MGR_NOERR
+    
+    ! Check if stream uses output_timelevels
+    timelevels_str = ''
+    call MPAS_stream_mgr_get_property(manager, trim(stream % name), &
+                                      MPAS_STREAM_PROPERTY_OUTPUT_TIMELEVELS, &
+                                      timelevels_str, ierr=ierr_tmp)
+    
+    if (len_trim(timelevels_str) == 0) then
+        ! Not a variable output stream, nothing to do
+        if (present(ierr)) ierr = MPAS_STREAM_MGR_NOERR
+        return
+    end if
+    
+    ! Calculate current forecast hour
+    start_time = mpas_get_clock_time(manager % streamClock, MPAS_START_TIME, ierr=ierr_tmp)
+    current_time = mpas_get_clock_time(manager % streamClock, MPAS_NOW, ierr=ierr_tmp)
+    time_diff = current_time - start_time
+    call mpas_get_timeInterval(time_diff, S=seconds_diff, ierr=ierr_tmp)
+    forecast_hour = real(seconds_diff, RKIND) / 3600.0_RKIND
+    
+    ! Get next interval
+    call get_output_interval_from_timelevels(timelevels_str, forecast_hour, interval_minutes, ierr_tmp)
+    if (ierr_tmp /= MPAS_STREAM_MGR_NOERR) then
+        if (present(ierr)) ierr = ierr_tmp
+        return
+    end if
+    
+    ! Convert minutes to time interval
+    call mpas_set_timeInterval(alarmInterval_local, M=interval_minutes, ierr=ierr_tmp)
+    local_ierr = ior(local_ierr, ierr_tmp)
+    
+    ! Remove old alarm
+    call mpas_remove_clock_alarm(manager % streamClock, alarm_name, ierr=ierr_tmp)
+    local_ierr = ior(local_ierr, ierr_tmp)
+    
+    ! Add new alarm with updated interval, starting from current time
+    alarmTime_local = current_time
+    call mpas_add_clock_alarm(manager % streamClock, alarm_name, alarmTime_local, &
+                             alarmTimeInterval=alarmInterval_local, ierr=ierr_tmp)
+    local_ierr = ior(local_ierr, ierr_tmp)
+    
+    if (present(ierr)) ierr = local_ierr
+
+end subroutine update_variable_output_alarm !}}}

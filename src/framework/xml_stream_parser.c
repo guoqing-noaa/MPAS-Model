@@ -31,6 +31,8 @@ void stream_mgr_add_immutable_stream_fields_c(void *, const char *, const char *
 void stream_mgr_add_pool_c(void *, const char *, const char *, const char *, int *);
 void stream_mgr_add_alarm_c(void *, const char *, const char *, const char *, const char *, int *);
 void stream_mgr_add_pkg_c(void *, const char *, const char *, int *);
+void stream_mgr_set_property_c(void *, const char *, const char *, const char *, int *);
+void stream_mgr_add_variable_output_alarm_c(void *, const char *, int *);
 
 
 /*
@@ -347,7 +349,7 @@ int par_read(char *fname, int *mpi_comm, char **xml_buf, size_t *bufsize)
  *********************************************************************************/
 int attribute_check(ezxml_t stream)
 {
-	const char *s_name, *s_type, *s_filename, *s_filename_intv, *s_input, *s_output, *s_ref_time;
+	const char *s_name, *s_type, *s_filename, *s_filename_intv, *s_input, *s_output, *s_ref_time, *s_output_timelevels;
 	char msgbuf[MSGSIZE];
 	int i, len, nextchar;
 
@@ -358,6 +360,7 @@ int attribute_check(ezxml_t stream)
 	s_input = ezxml_attr(stream, "input_interval");
 	s_output = ezxml_attr(stream, "output_interval");
 	s_ref_time = ezxml_attr(stream, "reference_time");
+	s_output_timelevels = ezxml_attr(stream, "output_timelevels");
 
 
 	/*
@@ -379,15 +382,20 @@ int attribute_check(ezxml_t stream)
 	}
 
 
-	/*
-	 *  Check that input streams have an input interval, output streams have an output interval
+	/* or output_timelevels
 	 */
 	if (strstr(s_type, "input") != NULL && s_input == NULL) {
 		snprintf(msgbuf, MSGSIZE, "stream \"%s\" is an input stream and must have the \"input_interval\" attribute.", s_name);
 		fmt_err(msgbuf);
 		return 1;
 	}
-	if (strstr(s_type, "output") != NULL && s_output == NULL) {
+	if (strstr(s_type, "output") != NULL && s_output == NULL && s_output_timelevels == NULL) {
+		snprintf(msgbuf, MSGSIZE, "stream \"%s\" is an output stream and must have either the \"output_interval\" or \"output_timelevels\" attribute.", s_name);
+		fmt_err(msgbuf);
+		return 1;
+	}
+	if (s_output != NULL && s_output_timelevels != NULL) {
+		snprintf(msgbuf, MSGSIZE, "stream \"%s\" cannot have both \"output_interval\" and \"output_timelevels\" attributes
 		snprintf(msgbuf, MSGSIZE, "stream \"%s\" is an output stream and must have the \"output_interval\" attribute.", s_name);
 		fmt_err(msgbuf);
 		return 1;
@@ -1433,6 +1441,7 @@ void xml_stream_parser(char *fname, void *manager, int *mpi_comm, int *status)
 	/* Next, handle modifications to mutable streams as well as new stream definitions */
 	immutable = 0;
 	for (stream_xml = ezxml_child(streams, "stream"); stream_xml; stream_xml = ezxml_next(stream_xml)) {
+		const char *output_timelevels;
 		streamID = ezxml_attr(stream_xml, "name");
 		direction = ezxml_attr(stream_xml, "type");
 		filename_template = ezxml_attr(stream_xml, "filename_template");
@@ -1441,6 +1450,7 @@ void xml_stream_parser(char *fname, void *manager, int *mpi_comm, int *status)
 		interval_in2 = ezxml_attr(stream_xml, "input_interval");
 		interval_out = ezxml_attr(stream_xml, "output_interval");
 		interval_out2 = ezxml_attr(stream_xml, "output_interval");
+		output_timelevels = ezxml_attr(stream_xml, "output_timelevels");
 		reference_time = ezxml_attr(stream_xml, "reference_time");
 		record_interval = ezxml_attr(stream_xml, "record_interval");
 		precision = ezxml_attr(stream_xml, "precision");
@@ -1696,6 +1706,17 @@ void xml_stream_parser(char *fname, void *manager, int *mpi_comm, int *status)
 			return;
 		}
 
+		/* If output_timelevels is specified, set it as a property */
+		if (output_timelevels != NULL) {
+			stream_mgr_set_property_c(manager, streamID, "output_timelevels", output_timelevels, &err);
+			if (err != 0) {
+				*status = 1;
+				return;
+			}
+			snprintf(msgbuf, MSGSIZE, "        %-20s%s", "output timelevels:", output_timelevels);
+			mpas_log_write_c(msgbuf, "MPAS_LOG_OUT");
+		}
+
 		/* Possibly add an input alarm for this stream */
 		if (itype == 3 || itype == 1) {
 			stream_mgr_add_alarm_c(manager, streamID, "input", "start", interval_in2, &err);
@@ -1714,16 +1735,28 @@ void xml_stream_parser(char *fname, void *manager, int *mpi_comm, int *status)
 
 		/* Possibly add an output alarm for this stream */
 		if (itype == 3 || itype == 2) {
-			stream_mgr_add_alarm_c(manager, streamID, "output", "start", interval_out2, &err);
-			if (err != 0) {
-				*status = 1;
-				return;
-			}
-			if ( strcmp(interval_out, interval_out2) != 0 ) {
-				snprintf(msgbuf, MSGSIZE, "        %-20s%s (%s)", "output alarm:", interval_out, interval_out2);
-				mpas_log_write_c(msgbuf, "MPAS_LOG_OUT");
+			/* If output_timelevels is specified, use variable alarm; otherwise use fixed interval */
+			if (output_timelevels == NULL) {
+				stream_mgr_add_alarm_c(manager, streamID, "output", "start", interval_out2, &err);
+				if (err != 0) {
+					*status = 1;
+					return;
+				}
+				if ( strcmp(interval_out, interval_out2) != 0 ) {
+					snprintf(msgbuf, MSGSIZE, "        %-20s%s (%s)", "output alarm:", interval_out, interval_out2);
+					mpas_log_write_c(msgbuf, "MPAS_LOG_OUT");
+				} else {
+					snprintf(msgbuf, MSGSIZE, "        %-20s%s", "output alarm:", interval_out);
+					mpas_log_write_c(msgbuf, "MPAS_LOG_OUT");
+				}
 			} else {
-				snprintf(msgbuf, MSGSIZE, "        %-20s%s", "output alarm:", interval_out);
+				/* Use variable output alarm based on timelevels */
+				stream_mgr_add_variable_output_alarm_c(manager, streamID, &err);
+				if (err != 0) {
+					*status = 1;
+					return;
+				}
+				snprintf(msgbuf, MSGSIZE, "        %-20s%s", "output alarm:", "variable (from output_timelevels)");
 				mpas_log_write_c(msgbuf, "MPAS_LOG_OUT");
 			}
 		}
