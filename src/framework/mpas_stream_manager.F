@@ -5966,8 +5966,16 @@ module mpas_stream_manager
         character :: unit_char
 
         ierr = 0
+        dash_pos(1) = 0
+        dash_pos(2) = 0
         spec_local = trim(adjustl(spec))
         len_spec = len_trim(spec_local)
+        
+        ! Guard against empty or too short string
+        if (len_spec < 3) then
+            ierr = 1
+            return
+        end if
 
         ! Count dashes to determine format
         dash_count = 0
@@ -5981,6 +5989,11 @@ module mpas_stream_manager
         ! Parse based on number of dashes
         if (dash_count == 1) then
             ! Format: start-end (interval defaults to 1 hour = 60 minutes)
+            ! Guard against dash at start or end
+            if (dash_pos(1) <= 1 .or. dash_pos(1) >= len_spec) then
+                ierr = 1
+                return
+            end if
             read(spec_local(1:dash_pos(1)-1), *, iostat=read_err) start_hour
             if (read_err /= 0) then
                 ierr = 1
@@ -5995,6 +6008,11 @@ module mpas_stream_manager
 
         else if (dash_count == 2) then
             ! Format: start-end-interval[unit]
+            ! Guard against invalid dash positions
+            if (dash_pos(1) <= 1 .or. dash_pos(2) <= dash_pos(1) + 1 .or. dash_pos(2) >= len_spec) then
+                ierr = 1
+                return
+            end if
             read(spec_local(1:dash_pos(1)-1), *, iostat=read_err) start_hour
             if (read_err /= 0) then
                 ierr = 1
@@ -6007,6 +6025,13 @@ module mpas_stream_manager
             end if
 
             token = spec_local(dash_pos(2)+1:len_spec)
+            
+            ! Guard against empty token (e.g., trailing dash)
+            if (len_trim(token) == 0) then
+                ierr = 1
+                return
+            end if
+            
             unit_char = token(len_trim(token):len_trim(token))
 
             if (unit_char == 'm' .or. unit_char == 'M') then
@@ -6066,7 +6091,7 @@ module mpas_stream_manager
         integer, intent(out) :: ierr
 
         character(len=StrKIND) :: work_str, segment
-        integer :: seg_start, seg_end, i, local_ierr
+        integer :: seg_start, seg_end, i, local_ierr, work_len
         real(kind=RKIND) :: start_hour, end_hour
         integer :: seg_interval_minutes
         logical :: found
@@ -6075,13 +6100,20 @@ module mpas_stream_manager
         interval_minutes = 60  ! Default to 1 hour
         found = .false.
         work_str = trim(adjustl(timelevels_str))
+        work_len = len_trim(work_str)
+        
+        ! Guard against empty string
+        if (work_len == 0) then
+            ierr = 1
+            return
+        end if
 
         ! Parse each space-separated segment
         seg_start = 1
-        do while (seg_start <= len_trim(work_str))
+        do while (seg_start <= work_len)
             ! Find end of current segment (next space or end of string)
             seg_end = seg_start
-            do while (seg_end <= len_trim(work_str) .and. work_str(seg_end:seg_end) /= ' ')
+            do while (seg_end <= work_len .and. work_str(seg_end:seg_end) /= ' ')
                 seg_end = seg_end + 1
             end do
             seg_end = seg_end - 1
@@ -6105,7 +6137,7 @@ module mpas_stream_manager
 
             ! Move to next segment
             seg_start = seg_end + 1
-            do while (seg_start <= len_trim(work_str) .and. work_str(seg_start:seg_start) == ' ')
+            do while (seg_start <= work_len .and. work_str(seg_start:seg_start) == ' ')
                 seg_start = seg_start + 1
             end do
         end do
