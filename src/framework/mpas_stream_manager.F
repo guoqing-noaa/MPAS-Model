@@ -3909,9 +3909,13 @@ module mpas_stream_manager
               STREAM_DEBUG_WRITE(' --- Retesting file... ')
               call mpas_get_time(filenameTime, dateTimeString=test_when)
 
-              call mpas_set_timeInterval(filename_interval, timeString=stream % filename_interval)
-
-              call mpas_build_stream_filename(stream % referenceTime, filenameTime, filename_interval, stream % filename_template, blockID_local, test_filename, ierr=local_ierr)
+              if ( stream % filename_interval == 'output' ) then
+                  ! Use actual time for filename
+                  call mpas_expand_string(test_when, blockID_local, stream % filename_template, test_filename)
+              else
+                  call mpas_set_timeInterval(filename_interval, timeString=stream % filename_interval)
+                  call mpas_build_stream_filename(stream % referenceTime, filenameTime, filename_interval, stream % filename_template, blockID_local, test_filename, ierr=local_ierr)
+              end if
 
               STREAM_DEBUG_WRITE(' --- Retesting filename is ' // trim(test_filename))
 
@@ -4142,7 +4146,11 @@ module mpas_stream_manager
            !
            ! First we need to build the filename for the current read time.
            !
-           if ( streamCursor % filename_interval /= 'none' ) then
+           if ( streamCursor % filename_interval == 'output' ) then
+               ! Use actual time for filename
+               call mpas_get_time(now_time, dateTimeString=when_string, ierr=err_local)
+               call mpas_expand_string(when_string, blockID_local, streamCursor % filename_template, filename)
+           else if ( streamCursor % filename_interval /= 'none' ) then
                call mpas_set_timeInterval(filename_interval, timeString=streamCursor % filename_interval)
                call mpas_build_stream_filename(streamCursor % referenceTime, now_time, filename_interval, streamCursor % filename_template, blockID_local, filename, ierr=err_local)
            else
@@ -4365,7 +4373,7 @@ module mpas_stream_manager
             !
             ! Write output_interval to stream
             !
-            IF (stream %filename_interval(1:4) /= "none") THEN
+            IF (stream %filename_interval(1:4) /= "none" .and. stream %filename_interval /= "output") THEN
                 call mpas_set_timeInterval(filename_interval, timeString=stream %filename_interval)
                 call mpas_get_timeInterval(filename_interval,M=output_interval)
                 call mpas_writeStreamAtt(stream%stream, 'output_interval',output_interval,syncVal=.true., ierr=local_ierr)
