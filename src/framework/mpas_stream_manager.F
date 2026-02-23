@@ -3837,7 +3837,9 @@ module mpas_stream_manager
            end if
 
            retestFile = .false.
-           if ( trim(stream % filename_interval) /= 'none' .and. whence /= MPAS_STREAM_EXACT_TIME ) then
+           if ( trim(stream % filename_interval) /= 'none' .and. &
+                trim(stream % filename_interval) /= 'output' .and. &
+                whence /= MPAS_STREAM_EXACT_TIME ) then
               currentTime = mpas_get_clock_time(manager % streamClock, MPAS_NOW, ierr=local_ierr)
               call mpas_set_timeInterval(filenameInterval, timeString=stream % filename_interval, ierr=local_ierr)
 
