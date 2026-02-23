@@ -3106,16 +3106,18 @@ module mpas_stream_manager
         integer, intent(out) :: ierr
 
         type (MPAS_stream_list_type), pointer :: alarm_cursor
-        type (MPAS_Time_type) :: ref_time
-        type (MPAS_TimeInterval_type) :: temp_interval
+        type (MPAS_Time_type) :: ref_time, start_time, current_time
+        type (MPAS_TimeInterval_type) :: temp_interval, time_diff
         type (MPAS_TimeInterval_type) :: filename_interval
         character (len=StrKIND) :: now_string, time_string
         character (len=StrKIND) :: temp_filename, actualWhen
-        character (len=StrKIND) :: err_string
+        character (len=StrKIND) :: err_string, timelevels_str
         logical :: ringing_alarm, recordSeek, swapRecords
         logical :: clobberRecords, clobberFiles, truncateFiles
         integer :: maxRecords, tempRecord
-        integer :: local_ierr, threadNum
+        integer :: local_ierr, threadNum, interval_minutes
+        integer (kind=I8KIND) :: seconds_diff
+        real (kind=RKIND) :: forecast_hour
 
         threadNum = mpas_threading_get_thread_num()
 
@@ -3155,6 +3157,39 @@ module mpas_stream_manager
 
            if ((.not. ringing_alarm) .and. (.not. forceWriteNow)) then
                return
+           end if
+
+           !
+           ! If stream uses output_timelevels, check if current forecast hour is within defined range
+           ! This prevents output when the alarm rings but we're past the timelevels range
+           !
+           timelevels_str = ''
+           call MPAS_stream_mgr_get_property(manager, trim(stream % name), &
+                                             MPAS_STREAM_PROPERTY_OUTPUT_TIMELEVELS, &
+                                             timelevels_str, ierr=local_ierr)
+           if (len_trim(timelevels_str) > 0) then
+               ! Calculate current forecast hour
+               start_time = mpas_get_clock_time(manager % streamClock, MPAS_START_TIME, ierr=local_ierr)
+               current_time = mpas_get_clock_time(manager % streamClock, MPAS_NOW, ierr=local_ierr)
+               time_diff = current_time - start_time
+               call mpas_get_timeInterval(time_diff, S_i8=seconds_diff, ierr=local_ierr)
+               forecast_hour = real(seconds_diff, RKIND) / 3600.0_RKIND
+
+               ! Check if forecast hour is within any defined timelevel range
+               call get_output_interval_from_timelevels(timelevels_str, forecast_hour, interval_minutes, local_ierr)
+               if (local_ierr /= MPAS_STREAM_MGR_NOERR .or. interval_minutes <= 0) then
+                   ! Outside defined timelevels range - skip output and remove alarm
+                   STREAM_DEBUG_WRITE('-- Stream '//trim(stream % name)//' output skipped: forecast hour outside output_timelevels range.')
+                   alarm_cursor => stream % alarmList_out % head
+                   do while (associated(alarm_cursor))
+                       if (mpas_is_alarm_ringing(manager % streamClock, alarm_cursor % name, ierr=local_ierr)) then
+                           call mpas_reset_clock_alarm(manager % streamClock, alarm_cursor % name, ierr=local_ierr)
+                           call mpas_remove_clock_alarm(manager % streamClock, alarm_cursor % name, ierr=local_ierr)
+                       end if
+                       alarm_cursor => alarm_cursor % next
+                   end do
+                   return
+               end if
            end if
 
            !
@@ -6142,10 +6177,10 @@ module mpas_stream_manager
             end do
         end do
 
-        ! If no matching range found, use the last segment's interval as default
-        if (.not. found .and. ierr == 0) then
-            ! Could optionally warn here
-            ! For now, interval_minutes keeps its last parsed value or default
+        ! If no matching range found, signal that no more output is needed
+        if (.not. found) then
+            interval_minutes = 0
+            ierr = MPAS_STREAM_MGR_ERROR  ! Signal no more output
         end if
 
     end subroutine get_output_interval_from_timelevels!}}}
@@ -6205,8 +6240,10 @@ module mpas_stream_manager
 
         ! Get next interval
         call get_output_interval_from_timelevels(timelevels_str, forecast_hour, interval_minutes, ierr_tmp)
-        if (ierr_tmp /= MPAS_STREAM_MGR_NOERR) then
-            if (present(ierr)) ierr = ierr_tmp
+        if (ierr_tmp /= MPAS_STREAM_MGR_NOERR .or. interval_minutes <= 0) then
+            ! No more output needed - just remove the alarm and don't recreate it
+            call mpas_remove_clock_alarm(manager % streamClock, alarm_name, ierr=ierr_tmp)
+            if (present(ierr)) ierr = MPAS_STREAM_MGR_NOERR
             return
         end if
 
