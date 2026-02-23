@@ -395,8 +395,7 @@ int attribute_check(ezxml_t stream)
 		return 1;
 	}
 	if (s_output != NULL && s_output_timelevels != NULL) {
-		snprintf(msgbuf, MSGSIZE, "stream \"%s\" cannot have both \"output_interval\" and \"output_timelevels\" attributes
-		snprintf(msgbuf, MSGSIZE, "stream \"%s\" is an output stream and must have the \"output_interval\" attribute.", s_name);
+		snprintf(msgbuf, MSGSIZE, "stream \"%s\" cannot have both \"output_interval\" and \"output_timelevels\" attributes.", s_name);
 		fmt_err(msgbuf);
 		return 1;
 	}
