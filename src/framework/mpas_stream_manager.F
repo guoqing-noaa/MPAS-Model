@@ -3192,7 +3192,7 @@ module mpas_stream_manager
                            ! If there's a future range, schedule alarm for when it starts
                            if (next_start_hour > 0.0_RKIND) then
                                STREAM_DEBUG_WRITE('-- Stream '//trim(stream % name)//' rescheduling alarm for next timelevel range.')
-                               call mpas_set_timeInterval(time_diff, H=int(next_start_hour), ierr=local_ierr)
+                               call mpas_set_timeInterval(time_diff, dt=next_start_hour * 3600.0_RKIND, ierr=local_ierr)
                                alarmTime_local = start_time + time_diff
                                call mpas_set_timeInterval(alarmInterval_local, dt=next_interval_minutes * 60.0_RKIND, ierr=local_ierr)
                                call mpas_add_clock_alarm(manager % streamClock, alarm_cursor % name, alarmTime_local, &
@@ -6448,7 +6448,7 @@ module mpas_stream_manager
             
             if (next_start_hour > 0.0_RKIND) then
                 ! Schedule alarm for when the next range starts
-                call mpas_set_timeInterval(time_diff, H=int(next_start_hour), ierr=ierr_tmp)
+                call mpas_set_timeInterval(time_diff, dt=next_start_hour * 3600.0_RKIND, ierr=ierr_tmp)
                 alarmTime_local = start_time + time_diff
                 call mpas_set_timeInterval(alarmInterval_local, dt=next_interval_minutes * 60.0_RKIND, ierr=ierr_tmp)
                 call mpas_add_clock_alarm(manager % streamClock, alarm_name, alarmTime_local, &
@@ -7014,7 +7014,7 @@ subroutine stream_mgr_add_variable_output_alarm_c(manager_c, streamID_c, ierr_c)
             return
         end if
         ! Schedule alarm for when the first range starts
-        call mpas_set_timeInterval(time_offset, H=int(next_start_hour), ierr=ierr_tmp)
+        call mpas_set_timeInterval(time_offset, dt=next_start_hour * 3600.0_RKIND, ierr=ierr_tmp)
         alarmTime_local = start_time + time_offset
         call mpas_set_timeInterval(alarmInterval_local, dt=next_interval_minutes * 60.0_RKIND, ierr=ierr_tmp)
     else
