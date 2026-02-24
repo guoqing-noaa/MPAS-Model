@@ -3116,10 +3116,10 @@ module mpas_stream_manager
         logical :: ringing_alarm, recordSeek, swapRecords
         logical :: clobberRecords, clobberFiles, truncateFiles
         integer :: maxRecords, tempRecord
-        integer :: local_ierr, threadNum, interval_minutes
+        integer :: local_ierr, threadNum
         integer (kind=I8KIND) :: seconds_diff
         real (kind=RKIND) :: forecast_hour, next_start_hour
-        integer :: next_interval_minutes
+        real (kind=RKIND) :: interval_minutes, next_interval_minutes
 
         threadNum = mpas_threading_get_thread_num()
 
@@ -3179,7 +3179,7 @@ module mpas_stream_manager
 
                ! Check if forecast hour is within any defined timelevel range
                call get_output_interval_from_timelevels(timelevels_str, forecast_hour, interval_minutes, local_ierr)
-               if (local_ierr /= MPAS_STREAM_MGR_NOERR .or. interval_minutes <= 0) then
+               if (local_ierr /= MPAS_STREAM_MGR_NOERR .or. interval_minutes <= 0.0_RKIND) then
                    ! Outside defined timelevels range - check if there's a future range to schedule
                    call get_next_timelevel_start(timelevels_str, forecast_hour, next_start_hour, next_interval_minutes, local_ierr)
                    
@@ -3194,7 +3194,7 @@ module mpas_stream_manager
                                STREAM_DEBUG_WRITE('-- Stream '//trim(stream % name)//' rescheduling alarm for next timelevel range.')
                                call mpas_set_timeInterval(time_diff, H=int(next_start_hour), ierr=local_ierr)
                                alarmTime_local = start_time + time_diff
-                               call mpas_set_timeInterval(alarmInterval_local, M=next_interval_minutes, ierr=local_ierr)
+                               call mpas_set_timeInterval(alarmInterval_local, dt=next_interval_minutes * 60.0_RKIND, ierr=local_ierr)
                                call mpas_add_clock_alarm(manager % streamClock, alarm_cursor % name, alarmTime_local, &
                                                         alarmTimeInterval=alarmInterval_local, ierr=local_ierr)
                            else
@@ -6011,15 +6011,108 @@ module mpas_stream_manager
 
     !|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
     !
+    !  parse_time_string
+    !
+    !> \brief Parse a time string into total minutes ( allow 0.5 minutes, i.e. 30 seconds)
+    !> \author Guoqing Ge
+    !> \date February 2026
+    !> \details
+    !>  Parses time strings like "1h30m", "45m", "6", "90s", "1D" into total minutes
+    !>  Supported units: h (hours), m (minutes), s (seconds), D (days)
+    !>  Plain integers without units are interpreted as hours
+    !
+    !-----------------------------------------------------------------------
+    subroutine parse_time_string(time_str, total_minutes, ierr)!{{{
+
+        implicit none
+
+        character(len=*), intent(in) :: time_str
+        real(kind=RKIND), intent(out) :: total_minutes
+        integer, intent(out) :: ierr
+
+        character(len=StrKIND) :: str_local
+        integer :: i, len_str, num_start, read_err
+        real(kind=RKIND) :: value
+        character :: ch
+        logical :: found_unit
+
+        ierr = 0
+        total_minutes = 0.0_RKIND
+        str_local = trim(adjustl(time_str))
+        len_str = len_trim(str_local)
+
+        if (len_str == 0) then
+            ierr = 1
+            return
+        end if
+
+        ! Check if last character is a digit (plain integer = hours)
+        ch = str_local(len_str:len_str)
+        if (ch >= '0' .and. ch <= '9') then
+            read(str_local, *, iostat=read_err) value
+            if (read_err /= 0) then
+                ierr = 1
+                return
+            end if
+            total_minutes = value * 60.0_RKIND
+            return
+        end if
+
+        ! Parse duration with units (e.g., "1h30m", "45m", "90s")
+        num_start = 1
+        i = 1
+        do while (i <= len_str)
+            ch = str_local(i:i)
+            ! Check for unit characters (case-sensitive: h,m,s lowercase; D uppercase)
+            if (ch == 'h' .or. ch == 'm' .or. ch == 's' .or. ch == 'D') then
+                
+                if (i == num_start) then
+                    ierr = 1  ! No number before unit
+                    return
+                end if
+                
+                read(str_local(num_start:i-1), *, iostat=read_err) value
+                if (read_err /= 0) then
+                    ierr = 1
+                    return
+                end if
+
+                select case (ch)
+                    case ('h')
+                        total_minutes = total_minutes + value * 60.0_RKIND
+                    case ('m')
+                        total_minutes = total_minutes + value
+                    case ('s')
+                        total_minutes = total_minutes + value / 60.0_RKIND
+                    case ('D')
+                        total_minutes = total_minutes + value * 24.0_RKIND * 60.0_RKIND
+                end select
+
+                num_start = i + 1
+            end if
+            i = i + 1
+        end do
+
+        ! Check for trailing digits without unit (error)
+        if (num_start <= len_str) then
+            ierr = 1
+            return
+        end if
+
+    end subroutine parse_time_string!}}}
+
+
+    !|||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||||
+    !
     !  parse_output_timelevel_spec
     !
     !> \brief Parse one time level specification segment
-    !> \author Guoqing Wang
+    !> \author Guoqing Ge
     !> \date February 2026
     !> \details
-    !>  Parses a single segment like "0-3-15m" or "4-72" into start hour, end hour, and interval
-    !>  Format: start_hour-end_hour-interval[unit]
-    !>  Unit can be 'm' for minutes, 'h' or omitted for hours
+    !>  Parses a single segment using format: start, start-stop, or start-stop-step
+    !>  Time strings can be integers (hours) or duration format (e.g., "1h30m", "45m")
+    !>  Examples: "6", "0-3", "0-1h-15m", "1h30m-2h-15m"
     !
     !-----------------------------------------------------------------------
     subroutine parse_output_timelevel_spec(spec, start_hour, end_hour, interval_minutes, ierr)!{{{
@@ -6028,20 +6121,20 @@ module mpas_stream_manager
 
         character(len=*), intent(in) :: spec
         real(kind=RKIND), intent(out) :: start_hour, end_hour
-        integer, intent(out) :: interval_minutes
+        real(kind=RKIND), intent(out) :: interval_minutes
         integer, intent(out) :: ierr
 
-        character(len=StrKIND) :: spec_local, token
-        integer :: i, dash_count, dash_pos(2), len_spec, read_err
-        real(kind=RKIND) :: interval_value
-        character :: unit_char
+        character(len=StrKIND) :: spec_local
+        integer :: i, dash_count, dash_pos(2), len_spec
+        real(kind=RKIND) :: start_minutes, end_minutes, step_minutes
+        integer :: local_ierr
 
         ierr = 0
         dash_pos(1) = 0
         dash_pos(2) = 0
         spec_local = trim(adjustl(spec))
         len_spec = len_trim(spec_local)
-        
+
         ! Guard against empty string
         if (len_spec == 0) then
             ierr = 1
@@ -6059,90 +6152,70 @@ module mpas_stream_manager
 
         ! Parse based on number of dashes
         if (dash_count == 0) then
-            ! Format: single hour (output at that hour only)
-            read(spec_local(1:len_spec), *, iostat=read_err) start_hour
-            if (read_err /= 0) then
+            ! Format: single time string (output at that time only)
+            call parse_time_string(spec_local, start_minutes, local_ierr)
+            if (local_ierr /= 0) then
                 ierr = 1
                 return
             end if
+            start_hour = start_minutes / 60.0_RKIND
             end_hour = start_hour
-            interval_minutes = 60  ! Default, but won't matter for single hour
+            interval_minutes = 60.0_RKIND  ! Default, but won't matter for single time
 
         else if (dash_count == 1) then
-            ! Format: start-end (interval defaults to 1 hour = 60 minutes)
-            ! Guard against dash at start or end
+            ! Format: start-stop (interval defaults to 1 hour)
             if (dash_pos(1) <= 1 .or. dash_pos(1) >= len_spec) then
                 ierr = 1
                 return
             end if
-            read(spec_local(1:dash_pos(1)-1), *, iostat=read_err) start_hour
-            if (read_err /= 0) then
+            
+            call parse_time_string(spec_local(1:dash_pos(1)-1), start_minutes, local_ierr)
+            if (local_ierr /= 0) then
                 ierr = 1
                 return
             end if
-            read(spec_local(dash_pos(1)+1:len_spec), *, iostat=read_err) end_hour
-            if (read_err /= 0) then
+            
+            call parse_time_string(spec_local(dash_pos(1)+1:len_spec), end_minutes, local_ierr)
+            if (local_ierr /= 0) then
                 ierr = 1
                 return
             end if
-            interval_minutes = 60
+            
+            start_hour = start_minutes / 60.0_RKIND
+            end_hour = end_minutes / 60.0_RKIND
+            interval_minutes = 60.0_RKIND
 
         else if (dash_count == 2) then
-            ! Format: start-end-interval[unit]
-            ! Guard against invalid dash positions
+            ! Format: start-stop-step
             if (dash_pos(1) <= 1 .or. dash_pos(2) <= dash_pos(1) + 1 .or. dash_pos(2) >= len_spec) then
                 ierr = 1
                 return
             end if
-            read(spec_local(1:dash_pos(1)-1), *, iostat=read_err) start_hour
-            if (read_err /= 0) then
-                ierr = 1
-                return
-            end if
-            read(spec_local(dash_pos(1)+1:dash_pos(2)-1), *, iostat=read_err) end_hour
-            if (read_err /= 0) then
-                ierr = 1
-                return
-            end if
-
-            token = spec_local(dash_pos(2)+1:len_spec)
             
-            ! Guard against empty token (e.g., trailing dash)
-            if (len_trim(token) == 0) then
+            call parse_time_string(spec_local(1:dash_pos(1)-1), start_minutes, local_ierr)
+            if (local_ierr /= 0) then
                 ierr = 1
                 return
             end if
             
-            unit_char = token(len_trim(token):len_trim(token))
-
-            if (unit_char == 'm' .or. unit_char == 'M') then
-                ! Interval in minutes
-                read(token(1:len_trim(token)-1), *, iostat=read_err) interval_value
-                if (read_err /= 0) then
-                    ierr = 1
-                    return
-                end if
-                interval_minutes = int(interval_value)
-            else if (unit_char == 'h' .or. unit_char == 'H') then
-                ! Interval in hours (explicit)
-                read(token(1:len_trim(token)-1), *, iostat=read_err) interval_value
-                if (read_err /= 0) then
-                    ierr = 1
-                    return
-                end if
-                interval_minutes = int(interval_value * 60.0)
-            else
-                ! No unit or digit at end, assume hours
-                read(token, *, iostat=read_err) interval_value
-                if (read_err /= 0) then
-                    ierr = 1
-                    return
-                end if
-                interval_minutes = int(interval_value * 60.0)
+            call parse_time_string(spec_local(dash_pos(1)+1:dash_pos(2)-1), end_minutes, local_ierr)
+            if (local_ierr /= 0) then
+                ierr = 1
+                return
             end if
+            
+            call parse_time_string(spec_local(dash_pos(2)+1:len_spec), step_minutes, local_ierr)
+            if (local_ierr /= 0) then
+                ierr = 1
+                return
+            end if
+            
+            start_hour = start_minutes / 60.0_RKIND
+            end_hour = end_minutes / 60.0_RKIND
+            interval_minutes = step_minutes
 
         else
-            ! Invalid format
+            ! More than 2 dashes - invalid format
             ierr = 1
             return
         end if
@@ -6155,7 +6228,7 @@ module mpas_stream_manager
     !  get_output_interval_from_timelevels
     !
     !> \brief Calculate output interval based on current forecast hour and timelevels
-    !> \author Guoqing Wang
+    !> \author Guoqing Ge
     !> \date February 2026
     !> \details
     !>  Given a time levels string and current forecast hour, determines the appropriate
@@ -6178,7 +6251,7 @@ module mpas_stream_manager
         logical :: found
 
         ierr = 0
-        interval_minutes = 60  ! Default to 1 hour
+        interval_minutes = 60.0_RKIND  ! Default to 1 hour
         found = .false.
         work_str = trim(adjustl(timelevels_str))
         work_len = len_trim(work_str)
@@ -6225,7 +6298,7 @@ module mpas_stream_manager
 
         ! If no matching range found, signal that no more output is needed
         if (.not. found) then
-            interval_minutes = 0
+            interval_minutes = 0.0_RKIND
             ierr = MPAS_STREAM_MGR_ERROR  ! Signal no more output
         end if
 
@@ -6251,20 +6324,20 @@ module mpas_stream_manager
         character(len=*), intent(in) :: timelevels_str
         real(kind=RKIND), intent(in) :: forecast_hour
         real(kind=RKIND), intent(out) :: next_start_hour
-        integer, intent(out) :: next_interval_minutes
+        real(kind=RKIND), intent(out) :: next_interval_minutes
         integer, intent(out) :: ierr
 
         character(len=StrKIND) :: work_str, segment
         integer :: seg_start, seg_end, local_ierr, work_len
         real(kind=RKIND) :: start_hour, end_hour, best_start
-        integer :: seg_interval_minutes, best_interval
+        real(kind=RKIND) :: seg_interval_minutes, best_interval
         logical :: found
 
         ierr = 0
         next_start_hour = -1.0_RKIND
-        next_interval_minutes = 60
+        next_interval_minutes = 60.0_RKIND
         best_start = huge(1.0_RKIND)
-        best_interval = 60
+        best_interval = 60.0_RKIND
         found = .false.
         work_str = trim(adjustl(timelevels_str))
         work_len = len_trim(work_str)
@@ -6340,7 +6413,8 @@ module mpas_stream_manager
         type (MPAS_Time_type) :: start_time, current_time, alarmTime_local
         type (MPAS_TimeInterval_type) :: time_diff, alarmInterval_local
         real (kind=RKIND) :: forecast_hour, next_start_hour
-        integer :: interval_minutes, local_ierr, ierr_tmp, next_interval_minutes
+        real (kind=RKIND) :: interval_minutes, next_interval_minutes
+        integer :: local_ierr, ierr_tmp
         integer (kind=I8KIND) :: seconds_diff
         character(len=StrKIND) :: timelevels_str
 
@@ -6367,7 +6441,7 @@ module mpas_stream_manager
 
         ! Get next interval
         call get_output_interval_from_timelevels(timelevels_str, forecast_hour, interval_minutes, ierr_tmp)
-        if (ierr_tmp /= MPAS_STREAM_MGR_NOERR .or. interval_minutes <= 0) then
+        if (ierr_tmp /= MPAS_STREAM_MGR_NOERR .or. interval_minutes <= 0.0_RKIND) then
             ! Current hour not in any range - check for future range
             call get_next_timelevel_start(timelevels_str, forecast_hour, next_start_hour, next_interval_minutes, ierr_tmp)
             call mpas_remove_clock_alarm(manager % streamClock, alarm_name, ierr=ierr_tmp)
@@ -6376,7 +6450,7 @@ module mpas_stream_manager
                 ! Schedule alarm for when the next range starts
                 call mpas_set_timeInterval(time_diff, H=int(next_start_hour), ierr=ierr_tmp)
                 alarmTime_local = start_time + time_diff
-                call mpas_set_timeInterval(alarmInterval_local, M=next_interval_minutes, ierr=ierr_tmp)
+                call mpas_set_timeInterval(alarmInterval_local, dt=next_interval_minutes * 60.0_RKIND, ierr=ierr_tmp)
                 call mpas_add_clock_alarm(manager % streamClock, alarm_name, alarmTime_local, &
                                          alarmTimeInterval=alarmInterval_local, ierr=ierr_tmp)
             end if
@@ -6384,8 +6458,8 @@ module mpas_stream_manager
             return
         end if
 
-        ! Convert minutes to time interval
-        call mpas_set_timeInterval(alarmInterval_local, M=interval_minutes, ierr=ierr_tmp)
+        ! Convert minutes to time interval (using dt in seconds for sub-minute precision)
+        call mpas_set_timeInterval(alarmInterval_local, dt=interval_minutes * 60.0_RKIND, ierr=ierr_tmp)
         local_ierr = ior(local_ierr, ierr_tmp)
 
         ! Remove old alarm
@@ -6894,9 +6968,9 @@ subroutine stream_mgr_add_variable_output_alarm_c(manager_c, streamID_c, ierr_c)
     character(len=StrKIND) :: streamID, alarmID, timelevels_str, ref_time_str
     type (MPAS_Time_type) :: alarmTime_local, ref_time, current_time, start_time
     type (MPAS_TimeInterval_type) :: alarmInterval_local, time_since_ref, time_offset
-    integer :: ierr, ierr_tmp, interval_minutes
+    integer :: ierr, ierr_tmp
     real(kind=RKIND) :: forecast_hour, next_start_hour
-    integer :: next_interval_minutes
+    real(kind=RKIND) :: interval_minutes, next_interval_minutes
 
 
     ierr = 0
@@ -6931,7 +7005,7 @@ subroutine stream_mgr_add_variable_output_alarm_c(manager_c, streamID_c, ierr_c)
     forecast_hour = 0.0_RKIND
     call get_output_interval_from_timelevels(timelevels_str, forecast_hour, interval_minutes, ierr_tmp)
     
-    if (ierr_tmp /= MPAS_STREAM_MGR_NOERR .or. interval_minutes <= 0) then
+    if (ierr_tmp /= MPAS_STREAM_MGR_NOERR .or. interval_minutes <= 0.0_RKIND) then
         ! Hour 0 not in any range - find the first range's start time
         call get_next_timelevel_start(timelevels_str, forecast_hour, next_start_hour, next_interval_minutes, ierr_tmp)
         if (ierr_tmp /= MPAS_STREAM_MGR_NOERR .or. next_start_hour < 0.0_RKIND) then
@@ -6942,11 +7016,11 @@ subroutine stream_mgr_add_variable_output_alarm_c(manager_c, streamID_c, ierr_c)
         ! Schedule alarm for when the first range starts
         call mpas_set_timeInterval(time_offset, H=int(next_start_hour), ierr=ierr_tmp)
         alarmTime_local = start_time + time_offset
-        call mpas_set_timeInterval(alarmInterval_local, M=next_interval_minutes, ierr=ierr_tmp)
+        call mpas_set_timeInterval(alarmInterval_local, dt=next_interval_minutes * 60.0_RKIND, ierr=ierr_tmp)
     else
         ! Hour 0 is in a valid range - start alarm at start time
         alarmTime_local = start_time
-        call mpas_set_timeInterval(alarmInterval_local, M=interval_minutes, ierr=ierr_tmp)
+        call mpas_set_timeInterval(alarmInterval_local, dt=interval_minutes * 60.0_RKIND, ierr=ierr_tmp)
     end if
     ierr = ior(ierr, ierr_tmp)
 
