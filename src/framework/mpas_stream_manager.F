@@ -6248,11 +6248,14 @@ module mpas_stream_manager
         integer :: seg_start, seg_end, i, local_ierr, work_len
         real(kind=RKIND) :: start_hour, end_hour
         real(kind=RKIND) :: seg_interval_minutes
-        logical :: found
+        real(kind=RKIND) :: next_time, min_next_time
+        logical :: found, is_single_time
 
         ierr = 0
         interval_minutes = 60.0_RKIND  ! Default to 1 hour
         found = .false.
+        is_single_time = .false.
+        min_next_time = huge(1.0_RKIND)
         work_str = trim(adjustl(timelevels_str))
         work_len = len_trim(work_str)
         
@@ -6262,7 +6265,7 @@ module mpas_stream_manager
             return
         end if
 
-        ! Parse each space-separated segment
+        ! First pass: find if current forecast hour matches any segment
         seg_start = 1
         do while (seg_start <= work_len)
             ! Find end of current segment (next space or end of string)
@@ -6279,9 +6282,15 @@ module mpas_stream_manager
                 if (local_ierr == 0) then
                     ! Check if current forecast hour falls in this range
                     if (forecast_hour >= start_hour .and. forecast_hour <= end_hour) then
-                        interval_minutes = seg_interval_minutes
                         found = .true.
-                        exit
+                        ! Check if this is a single time point (not a range)
+                        if (abs(start_hour - end_hour) < 1.0e-6_RKIND) then
+                            is_single_time = .true.
+                        else
+                            ! It's a range - use the segment's interval
+                            interval_minutes = seg_interval_minutes
+                            return
+                        end if
                     end if
                 else
                     ierr = 1
@@ -6295,6 +6304,53 @@ module mpas_stream_manager
                 seg_start = seg_start + 1
             end do
         end do
+
+        ! If we matched a single time, find the next output time
+        if (found .and. is_single_time) then
+            ! Second pass: find the minimum time > forecast_hour
+            seg_start = 1
+            do while (seg_start <= work_len)
+                seg_end = seg_start
+                do while (seg_end <= work_len .and. work_str(seg_end:seg_end) /= ' ')
+                    seg_end = seg_end + 1
+                end do
+                seg_end = seg_end - 1
+
+                if (seg_end >= seg_start) then
+                    segment = work_str(seg_start:seg_end)
+                    call parse_output_timelevel_spec(segment, start_hour, end_hour, seg_interval_minutes, local_ierr)
+
+                    if (local_ierr == 0) then
+                        ! For single times, check if > current
+                        if (abs(start_hour - end_hour) < 1.0e-6_RKIND) then
+                            if (start_hour > forecast_hour + 1.0e-6_RKIND .and. start_hour < min_next_time) then
+                                min_next_time = start_hour
+                            end if
+                        else
+                            ! For ranges, check if start is after current
+                            if (start_hour > forecast_hour + 1.0e-6_RKIND .and. start_hour < min_next_time) then
+                                min_next_time = start_hour
+                            end if
+                        end if
+                    end if
+                end if
+
+                seg_start = seg_end + 1
+                do while (seg_start <= work_len .and. work_str(seg_start:seg_start) == ' ')
+                    seg_start = seg_start + 1
+                end do
+            end do
+
+            ! Calculate interval to next time
+            if (min_next_time < huge(1.0_RKIND)) then
+                interval_minutes = (min_next_time - forecast_hour) * 60.0_RKIND
+            else
+                ! No more times - signal completion
+                interval_minutes = 0.0_RKIND
+                ierr = MPAS_STREAM_MGR_ERROR
+            end if
+            return
+        end if
 
         ! If no matching range found, signal that no more output is needed
         if (.not. found) then
