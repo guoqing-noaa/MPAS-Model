@@ -6867,10 +6867,11 @@ subroutine stream_mgr_add_variable_output_alarm_c(manager_c, streamID_c, ierr_c)
                                    MPAS_STREAM_MGR_NOERR, MPAS_STREAM_OUTPUT, MPAS_START_TIME, &
                                    MPAS_STREAM_PROPERTY_OUTPUT_TIMELEVELS, MPAS_STREAM_PROPERTY_REF_TIME
     use mpas_stream_manager, only : MPAS_stream_mgr_get_clock, MPAS_stream_mgr_add_alarm, &
-                                    MPAS_stream_mgr_get_property, get_output_interval_from_timelevels
+                                    MPAS_stream_mgr_get_property, get_output_interval_from_timelevels, &
+                                    get_next_timelevel_start
     use mpas_kind_types, only : StrKIND, RKIND
     use mpas_timekeeping, only : mpas_add_clock_alarm, mpas_get_clock_time, mpas_set_time, mpas_set_timeInterval, &
-                                 mpas_get_timeInterval, operator(-)
+                                 mpas_get_timeInterval, operator(-), operator(+)
 
     implicit none
 
@@ -6881,10 +6882,11 @@ subroutine stream_mgr_add_variable_output_alarm_c(manager_c, streamID_c, ierr_c)
     type (MPAS_streamManager_type), pointer :: manager
     type (MPAS_Clock_type), pointer :: clock
     character(len=StrKIND) :: streamID, alarmID, timelevels_str, ref_time_str
-    type (MPAS_Time_type) :: alarmTime_local, ref_time, current_time
-    type (MPAS_TimeInterval_type) :: alarmInterval_local, time_since_ref
+    type (MPAS_Time_type) :: alarmTime_local, ref_time, current_time, start_time
+    type (MPAS_TimeInterval_type) :: alarmInterval_local, time_since_ref, time_offset
     integer :: ierr, ierr_tmp, interval_minutes
-    real(kind=RKIND) :: forecast_hour
+    real(kind=RKIND) :: forecast_hour, next_start_hour
+    integer :: next_interval_minutes
 
 
     ierr = 0
@@ -6911,17 +6913,31 @@ subroutine stream_mgr_add_variable_output_alarm_c(manager_c, streamID_c, ierr_c)
     call mpas_set_time(ref_time, dateTimeString=ref_time_str, ierr=ierr_tmp)
     ierr = ior(ierr, ierr_tmp)
 
-    ! For initial alarm, set it to start time (forecast hour 0)
-    alarmTime_local = mpas_get_clock_time(clock, MPAS_START_TIME, ierr=ierr_tmp)
+    ! For initial alarm, get start time
+    start_time = mpas_get_clock_time(clock, MPAS_START_TIME, ierr=ierr_tmp)
     ierr = ior(ierr, ierr_tmp)
 
     ! Get interval for first output (at forecast hour 0)
     forecast_hour = 0.0_RKIND
     call get_output_interval_from_timelevels(timelevels_str, forecast_hour, interval_minutes, ierr_tmp)
-    ierr = ior(ierr, ierr_tmp)
-
-    ! Convert minutes to time interval
-    call mpas_set_timeInterval(alarmInterval_local, M=interval_minutes, ierr=ierr_tmp)
+    
+    if (ierr_tmp /= MPAS_STREAM_MGR_NOERR .or. interval_minutes <= 0) then
+        ! Hour 0 not in any range - find the first range's start time
+        call get_next_timelevel_start(timelevels_str, forecast_hour, next_start_hour, next_interval_minutes, ierr_tmp)
+        if (ierr_tmp /= MPAS_STREAM_MGR_NOERR .or. next_start_hour < 0.0_RKIND) then
+            ! No valid ranges at all
+            ierr_c = 1
+            return
+        end if
+        ! Schedule alarm for when the first range starts
+        call mpas_set_timeInterval(time_offset, H=int(next_start_hour), ierr=ierr_tmp)
+        alarmTime_local = start_time + time_offset
+        call mpas_set_timeInterval(alarmInterval_local, M=next_interval_minutes, ierr=ierr_tmp)
+    else
+        ! Hour 0 is in a valid range - start alarm at start time
+        alarmTime_local = start_time
+        call mpas_set_timeInterval(alarmInterval_local, M=interval_minutes, ierr=ierr_tmp)
+    end if
     ierr = ior(ierr, ierr_tmp)
 
     ! Add the alarm
