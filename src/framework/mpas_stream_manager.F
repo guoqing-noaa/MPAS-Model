@@ -6241,13 +6241,13 @@ module mpas_stream_manager
 
         character(len=*), intent(in) :: timelevels_str
         real(kind=RKIND), intent(in) :: forecast_hour
-        integer, intent(out) :: interval_minutes
+        real(kind=RKIND), intent(out) :: interval_minutes
         integer, intent(out) :: ierr
 
         character(len=StrKIND) :: work_str, segment
         integer :: seg_start, seg_end, i, local_ierr, work_len
         real(kind=RKIND) :: start_hour, end_hour
-        integer :: seg_interval_minutes
+        real(kind=RKIND) :: seg_interval_minutes
         logical :: found
 
         ierr = 0
