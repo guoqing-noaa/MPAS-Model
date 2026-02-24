@@ -6042,8 +6042,8 @@ module mpas_stream_manager
         spec_local = trim(adjustl(spec))
         len_spec = len_trim(spec_local)
         
-        ! Guard against empty or too short string
-        if (len_spec < 3) then
+        ! Guard against empty string
+        if (len_spec == 0) then
             ierr = 1
             return
         end if
@@ -6058,7 +6058,17 @@ module mpas_stream_manager
         end do
 
         ! Parse based on number of dashes
-        if (dash_count == 1) then
+        if (dash_count == 0) then
+            ! Format: single hour (output at that hour only)
+            read(spec_local(1:len_spec), *, iostat=read_err) start_hour
+            if (read_err /= 0) then
+                ierr = 1
+                return
+            end if
+            end_hour = start_hour
+            interval_minutes = 60  ! Default, but won't matter for single hour
+
+        else if (dash_count == 1) then
             ! Format: start-end (interval defaults to 1 hour = 60 minutes)
             ! Guard against dash at start or end
             if (dash_pos(1) <= 1 .or. dash_pos(1) >= len_spec) then
