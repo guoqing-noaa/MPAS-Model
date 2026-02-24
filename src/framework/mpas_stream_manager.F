@@ -3179,7 +3179,7 @@ module mpas_stream_manager
 
                ! Check if forecast hour is within any defined timelevel range
                call get_output_interval_from_timelevels(timelevels_str, forecast_hour, interval_minutes, local_ierr)
-               if (local_ierr /= MPAS_STREAM_MGR_NOERR .or. interval_minutes <= 0.0_RKIND) then
+               if (local_ierr /= MPAS_STREAM_MGR_NOERR) then
                    ! Outside defined timelevels range - check if there's a future range to schedule
                    call get_next_timelevel_start(timelevels_str, forecast_hour, next_start_hour, next_interval_minutes, local_ierr)
                    
@@ -6017,8 +6017,8 @@ module mpas_stream_manager
     !> \author Guoqing Ge
     !> \date February 2026
     !> \details
-    !>  Parses time strings like "1h30m", "45m", "6", "90s", "1D" into total minutes
-    !>  Supported units: h (hours), m (minutes), s (seconds), D (days)
+    !>  Parses time strings like "1h30m", "45m", "6", "90s", "1d" into total minutes
+    !>  Supported units: d/D (days), h (hours), m (minutes), s (seconds)
     !>  Plain integers without units are interpreted as hours
     !
     !-----------------------------------------------------------------------
@@ -6058,13 +6058,13 @@ module mpas_stream_manager
             return
         end if
 
-        ! Parse duration with units (e.g., "1h30m", "45m", "90s")
+        ! Parse duration with units (e.g., "1h30m", "45m", "90s", "1d" or "1D")
         num_start = 1
         i = 1
         do while (i <= len_str)
             ch = str_local(i:i)
-            ! Check for unit characters (case-sensitive: h,m,s lowercase; D uppercase)
-            if (ch == 'h' .or. ch == 'm' .or. ch == 's' .or. ch == 'D') then
+            ! Check for unit characters: d/D (days), h (hours), m (minutes), s (seconds)
+            if (ch == 'h' .or. ch == 'm' .or. ch == 's' .or. ch == 'd' .or. ch == 'D') then
                 
                 if (i == num_start) then
                     ierr = 1  ! No number before unit
@@ -6084,7 +6084,7 @@ module mpas_stream_manager
                         total_minutes = total_minutes + value
                     case ('s')
                         total_minutes = total_minutes + value / 60.0_RKIND
-                    case ('D')
+                    case ('d', 'D')
                         total_minutes = total_minutes + value * 24.0_RKIND * 60.0_RKIND
                 end select
 
@@ -6345,9 +6345,9 @@ module mpas_stream_manager
             if (min_next_time < huge(1.0_RKIND)) then
                 interval_minutes = (min_next_time - forecast_hour) * 60.0_RKIND
             else
-                ! No more times - signal completion
+                ! No more times after this - but we DID match, so ierr stays 0
+                ! interval_minutes = 0 signals this is the last output
                 interval_minutes = 0.0_RKIND
-                ierr = MPAS_STREAM_MGR_ERROR
             end if
             return
         end if
