@@ -12,16 +12,16 @@
                                   MPAS_STREAM_INPUT_OUTPUT = 3, &
                                   MPAS_STREAM_NONE         = 4
 
-    integer, public, parameter :: MPAS_STREAM_PROPERTY_ACTIVE           =  5, &
-                                  MPAS_STREAM_PROPERTY_IMMUTABLE        =  6, &
-                                  MPAS_STREAM_PROPERTY_FILENAME         =  7, &
-                                  MPAS_STREAM_PROPERTY_REF_TIME         =  8, &
-                                  MPAS_STREAM_PROPERTY_RECORD_INTV      =  9, &
-                                  MPAS_STREAM_PROPERTY_PRECISION        = 10, &
-                                  MPAS_STREAM_PROPERTY_FILENAME_INTV    = 11, &
-                                  MPAS_STREAM_PROPERTY_CLOBBER          = 12, &
-                                  MPAS_STREAM_PROPERTY_IOTYPE           = 13, &
-                                  MPAS_STREAM_PROPERTY_GATTR_UPDATE     = 14, &
+    integer, public, parameter :: MPAS_STREAM_PROPERTY_ACTIVE        =  5, &
+                                  MPAS_STREAM_PROPERTY_IMMUTABLE     =  6, &
+                                  MPAS_STREAM_PROPERTY_FILENAME      =  7, &
+                                  MPAS_STREAM_PROPERTY_REF_TIME      =  8, &
+                                  MPAS_STREAM_PROPERTY_RECORD_INTV   =  9, &
+                                  MPAS_STREAM_PROPERTY_PRECISION     = 10, &
+                                  MPAS_STREAM_PROPERTY_FILENAME_INTV = 11, &
+                                  MPAS_STREAM_PROPERTY_CLOBBER       = 12, &
+                                  MPAS_STREAM_PROPERTY_IOTYPE        = 13, &
+                                  MPAS_STREAM_PROPERTY_GATTR_UPDATE  = 14, &
                                   MPAS_STREAM_PROPERTY_OUTPUT_TIMELEVELS = 15
 
     integer, public, parameter :: MPAS_STREAM_CLOBBER_NEVER     = 100, &

@@ -6310,7 +6310,7 @@ module mpas_stream_manager
     !  get_next_timelevel_start
     !
     !> \brief Find the start hour of the next timelevel range after current forecast hour
-    !> \author MPAS Development Team
+    !> \author Guoqing Ge
     !> \date February 2026
     !> \details
     !>  Given a time levels string and current forecast hour, finds the start hour
@@ -6391,7 +6391,7 @@ module mpas_stream_manager
     !  update_variable_output_alarm
     !
     !> \brief Update variable output alarm with new interval based on forecast hour
-    !> \author MPAS Development Team
+    !> \author Guoqing Ge
     !> \date February 2026
     !> \details
     !>  This routine updates a variable output alarm after it has rung by:
@@ -6900,7 +6900,7 @@ subroutine stream_mgr_add_pkg_c(manager_c, streamID_c, package_c, ierr_c) bind(c
 end subroutine stream_mgr_add_pkg_c !}}}
 
 
-subroutine stream_mgr_set_property_c(manager_c, streamID_c, propertyName_c, propertyValue_c, ierr_c) bind(c) !{ { {
+subroutine stream_mgr_set_property_c(manager_c, streamID_c, propertyName_c, propertyValue_c, ierr_c) bind(c) !{{{
 
     use mpas_c_interfacing, only : mpas_c_to_f_string
     use iso_c_binding, only : c_char, c_int, c_ptr, c_f_pointer
@@ -6940,10 +6940,10 @@ subroutine stream_mgr_set_property_c(manager_c, streamID_c, propertyName_c, prop
         ierr_c = 1
     end if
 
-end subroutine stream_mgr_set_property_c !} } }
+end subroutine stream_mgr_set_property_c !}}}
 
 
-subroutine stream_mgr_add_variable_output_alarm_c(manager_c, streamID_c, ierr_c) bind(c) !{ { {
+subroutine stream_mgr_add_variable_output_alarm_c(manager_c, streamID_c, ierr_c) bind(c) !{{{
 
     use mpas_c_interfacing, only : mpas_c_to_f_string
     use iso_c_binding, only : c_char, c_int, c_ptr, c_f_pointer
@@ -7038,4 +7038,4 @@ subroutine stream_mgr_add_variable_output_alarm_c(manager_c, streamID_c, ierr_c)
         ierr_c = 1
     end if
 
-end subroutine stream_mgr_add_variable_output_alarm_c !} } }
+end subroutine stream_mgr_add_variable_output_alarm_c !}}}
