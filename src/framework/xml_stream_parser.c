@@ -382,9 +382,9 @@ int attribute_check(ezxml_t stream)
 	}
 
 
-        /*
-         *  Check that input streams have an input interval, output streams have an output interval or output_timelevels
-         */
+	/*
+	 *  Check that input streams have an input interval, output streams have an output interval or output_timelevels
+	 */
 	if (strstr(s_type, "input") != NULL && s_input == NULL) {
 		snprintf(msgbuf, MSGSIZE, "stream \"%s\" is an input stream and must have the \"input_interval\" attribute.", s_name);
 		fmt_err(msgbuf);
