@@ -44,7 +44,8 @@ set(init_atm_core_srcs
         mpas_stack.F
         mpas_gsl_oro_data_sm_scale.F
         mpas_gsl_oro_data_lg_scale.F
-        read_geogrid.c)
+        read_geogrid.c
+        read_geogrid_netcdf.c)
 
 add_library(core_init_atmosphere ${init_atm_core_srcs})
 if (${DO_PHYSICS})

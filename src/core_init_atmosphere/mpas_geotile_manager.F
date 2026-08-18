@@ -26,6 +26,9 @@ module mpas_geotile_manager
 
         character (len=StrKIND) :: directory ! Path to the dataset directory
         character (len=StrKIND) :: index     ! Path the index file of the dataset directory
+        character (len=StrKIND) :: format    ! Data format: 'geogrid' (default) or 'netcdf'
+        character (len=StrKIND) :: nc_filepath  ! Full path to NetCDF file (when format='netcdf')
+        character (len=StrKIND) :: nc_varname   ! Variable name in NetCDF file
 
         integer :: nTileX ! Number of tiles in the X direction
         integer :: nTileY ! Number of tiles in the Y direction
@@ -113,12 +116,16 @@ module mpas_geotile_manager
         ! Local variables
         character (len=StrKIND), pointer :: fieldType
         character (len=StrKIND), pointer :: endian
+        character (len=StrKIND), pointer :: dataFormat
+        character (len=StrKIND), pointer :: nc_filename
+        character (len=StrKIND), pointer :: nc_variable
         integer, pointer :: tile_nx ! Number of pixels in the x-direction for a single tile
         integer, pointer :: tile_ny ! Number of pixels in the y-direction for a single tile
         integer, pointer :: tile_nz ! Number of pixels in the z-direction for a single tile
         integer, pointer :: tile_z_start, tile_z_end
         integer, pointer :: signed
         integer, pointer :: tile_bdr
+        integer, pointer :: wordsize
         integer, pointer :: iswater, islake, isice, isurban, isoilwater
         integer, pointer :: category_min, category_max
         integer :: err_level
@@ -152,10 +159,63 @@ module mpas_geotile_manager
             return
         endif
 
+        !
+        ! Determine the data format: 'geogrid' (default) or 'netcdf'
+        !
+        dataFormat => null()
+        nc_filename => null()
+        nc_variable => null()
+
+        err_level = mpas_pool_get_error_level()
+        call mpas_pool_set_error_level(MPAS_POOL_SILENT)
+        call mpas_pool_get_config(mgr % pool, 'format', dataFormat)
+        call mpas_pool_set_error_level(err_level)
+
+        if (associated(dataFormat) .and. trim(dataFormat) == 'netcdf') then
+            mgr % format = 'netcdf'
+
+            err_level = mpas_pool_get_error_level()
+            call mpas_pool_set_error_level(MPAS_POOL_SILENT)
+            call mpas_pool_get_config(mgr % pool, 'filename', nc_filename)
+            call mpas_pool_get_config(mgr % pool, 'variable', nc_variable)
+            call mpas_pool_set_error_level(err_level)
+
+            if (.not. associated(nc_filename)) then
+                call mpas_log_write("NetCDF format requires 'filename' in index file: "//trim(mgr % index), &
+                                    messageType=MPAS_LOG_ERR)
+                ierr = 1
+                return
+            endif
+            if (.not. associated(nc_variable)) then
+                call mpas_log_write("NetCDF format requires 'variable' in index file: "//trim(mgr % index), &
+                                    messageType=MPAS_LOG_ERR)
+                ierr = 1
+                return
+            endif
+
+            mgr % nc_filepath = trim(mgr % directory)//trim(nc_filename)
+            mgr % nc_varname = trim(nc_variable)
+
+            ! Verify the NetCDF file exists
+            inquire(file=trim(mgr % nc_filepath), exist=res)
+            if (.not. res) then
+                call mpas_log_write("NetCDF data file not found: "//trim(mgr % nc_filepath), messageType=MPAS_LOG_ERR)
+                ierr = 1
+                return
+            endif
+
+            call mpas_log_write("  Using NetCDF format: file='"//trim(nc_filename)//"', variable='"//trim(nc_variable)//"'")
+        else
+            mgr % format = 'geogrid'
+            mgr % nc_filepath = ''
+            mgr % nc_varname = ''
+        endif
+
         signed => null()
         endian => null()
         scalefactor => null()
         tile_bdr => null()
+        wordsize => null()
 
         err_level = mpas_pool_get_error_level()
         call mpas_pool_set_error_level(MPAS_POOL_SILENT)
@@ -184,6 +244,16 @@ module mpas_geotile_manager
 
         if (.not. associated(tile_bdr)) then
             call mpas_pool_add_config(mgr % pool, 'tile_bdr', 0)
+        endif
+
+        ! For NetCDF format, wordsize is not needed but must exist in the pool
+        ! to avoid null pointer issues in add_tile's pool_get calls
+        if (trim(mgr % format) == 'netcdf') then
+            call mpas_pool_get_config(mgr % pool, 'wordsize', wordsize)
+            if (.not. associated(wordsize)) then
+                call mpas_pool_add_config(mgr % pool, 'wordsize', 1)
+            endif
+            wordsize => null()
         endif
 
         !
@@ -525,6 +595,23 @@ module mpas_geotile_manager
            end subroutine read_geogrid
         end interface
 
+        interface
+           subroutine read_geogrid_netcdf(fname, varname, rarray, nx, ny, nz, &
+                                          start_x, start_y, start_z, status) bind(C)
+              use iso_c_binding, only : c_char, c_int, c_float, c_ptr
+              character (c_char), dimension(*), intent(in) :: fname
+              character (c_char), dimension(*), intent(in) :: varname
+              type (c_ptr), value :: rarray
+              integer (c_int), intent(in), value :: nx
+              integer (c_int), intent(in), value :: ny
+              integer (c_int), intent(in), value :: nz
+              integer (c_int), intent(in), value :: start_x
+              integer (c_int), intent(in), value :: start_y
+              integer (c_int), intent(in), value :: start_z
+              integer (c_int), intent(inout) :: status
+           end subroutine read_geogrid_netcdf
+        end interface
+
         ! Arguments
         class (mpas_geotile_mgr_type) :: mgr
         real (kind=RKIND), intent(in) :: lat
@@ -545,10 +632,12 @@ module mpas_geotile_manager
 
         character (len=StrKIND) :: fname
         character (kind=c_char), dimension(StrKIND+1) :: c_fname
+        character (kind=c_char), dimension(StrKIND+1) :: c_varname
         integer (c_int) :: c_tile_nx, c_tile_ny, c_tile_nz
         integer (c_int) :: c_endian
         integer (c_int) :: c_wordsize
         integer (c_int) :: c_signed
+        integer (c_int) :: c_start_x, c_start_y, c_start_z
         integer (c_int) :: status
         type (c_ptr) :: c_tile_ptr
 
@@ -581,21 +670,8 @@ module mpas_geotile_manager
         ! Reset the pool's error level
         call mpas_pool_set_error_level(err_level)
 
-        c_tile_nx = tile_nx + 2 * tile_bdr ! The number of pixels in the x direction, including halo cells
-        c_tile_ny = tile_ny + 2 * tile_bdr ! The number of pixels in the y direction, including halo cells
-        c_tile_nz = tile_nz
-
-        c_wordsize = wordsize
-        c_signed = signed
-
-        if (endian == "big") then
-            c_endian = 0
-        else if (endian == "little") then
-            c_endian = 1
-        endif
-
         !
-        ! Determine the file that contains lat, lon.
+        ! Determine the tile location (start_x, start_y in global pixel coords)
         !
         ierr = mgr % gen_filename(lat, lon, fname, start_x, start_y)
         if (ierr /= 0) then
@@ -605,29 +681,82 @@ module mpas_geotile_manager
         endif
 
         !
-        ! See if this file actually exists
-        !
-        fname = trim(mgr % directory)//trim(fname)
-        inquire(file=trim(fname), exist=res)
-        if (.not. res) then
-            call mpas_log_write("This geotile file does not exist: "//trim(fname), messageType=MPAS_LOG_ERR)
-            ierr = 1
-            return
-        endif
-
-        call mpas_f_to_c_string(fname, c_fname)
-
-        !
-        ! Allocate and read the tile
+        ! Allocate the tile structure
         !
         allocate(tile)
         allocate(tile % tile(tile_nx + (tile_bdr * 2), tile_ny + (tile_bdr * 2), tile_z_start:tile_z_end))
-        c_tile_ptr = c_loc(tile % tile)
-        call read_geogrid(c_fname, c_tile_ptr, c_tile_nx, c_tile_ny, c_tile_nz, c_signed, c_endian, c_wordsize, status)
-        if (status /= 0) then
-            call mpas_log_write("Error reading this geogrid file: "//trim(fname), messageType=MPAS_LOG_ERR)
-            ierr = 1
-            return
+
+        !
+        ! Read the tile data based on the format
+        !
+        if (trim(mgr % format) == 'netcdf') then
+            !
+            ! NetCDF format: read a sub-region from the global NetCDF file
+            !
+            c_tile_nx = tile_nx + 2 * tile_bdr
+            c_tile_ny = tile_ny + 2 * tile_bdr
+            c_tile_nz = tile_nz
+
+            ! Convert to 0-based indices for C, accounting for border
+            c_start_x = start_x - 1 - tile_bdr
+            c_start_y = start_y - 1 - tile_bdr
+            c_start_z = tile_z_start - 1
+
+            call mpas_f_to_c_string(mgr % nc_filepath, c_fname)
+            call mpas_f_to_c_string(mgr % nc_varname, c_varname)
+
+            c_tile_ptr = c_loc(tile % tile)
+            call read_geogrid_netcdf(c_fname, c_varname, c_tile_ptr, c_tile_nx, c_tile_ny, c_tile_nz, &
+                                     c_start_x, c_start_y, c_start_z, status)
+            if (status /= 0) then
+                call mpas_log_write("Error reading NetCDF file: "//trim(mgr % nc_filepath), messageType=MPAS_LOG_ERR)
+                call mpas_log_write("  Variable: "//trim(mgr % nc_varname))
+                deallocate(tile % tile)
+                deallocate(tile)
+                tile => null()
+                ierr = 1
+                return
+            endif
+        else
+            !
+            ! Geogrid binary format: read from individual tile file
+            !
+            c_tile_nx = tile_nx + 2 * tile_bdr
+            c_tile_ny = tile_ny + 2 * tile_bdr
+            c_tile_nz = tile_nz
+
+            c_wordsize = wordsize
+            c_signed = signed
+
+            if (endian == "big") then
+                c_endian = 0
+            else if (endian == "little") then
+                c_endian = 1
+            endif
+
+            fname = trim(mgr % directory)//trim(fname)
+            inquire(file=trim(fname), exist=res)
+            if (.not. res) then
+                call mpas_log_write("This geotile file does not exist: "//trim(fname), messageType=MPAS_LOG_ERR)
+                deallocate(tile % tile)
+                deallocate(tile)
+                tile => null()
+                ierr = 1
+                return
+            endif
+
+            call mpas_f_to_c_string(fname, c_fname)
+
+            c_tile_ptr = c_loc(tile % tile)
+            call read_geogrid(c_fname, c_tile_ptr, c_tile_nx, c_tile_ny, c_tile_nz, c_signed, c_endian, c_wordsize, status)
+            if (status /= 0) then
+                call mpas_log_write("Error reading this geogrid file: "//trim(fname), messageType=MPAS_LOG_ERR)
+                deallocate(tile % tile)
+                deallocate(tile)
+                tile => null()
+                ierr = 1
+                return
+            endif
         endif
 
         tile % fname = fname

@@ -1,0 +1,53 @@
+# Example index file for NetCDF-format geographic source data
+#
+# This demonstrates how to use a NetCDF file as input to init_atmosphere
+# for generating MPAS static.nc files, instead of the traditional WPS
+# geogrid binary format.
+#
+# Place this 'index' file in a directory alongside your NetCDF data file.
+# The directory path is what you specify in the GEOG_DATA_PATH.
+#
+# Required keywords for NetCDF format:
+#   format    - must be "netcdf"
+#   filename  - name of the NetCDF file (relative to this directory)
+#   variable  - name of the variable to read from the NetCDF file
+#   type      - "continuous" or "categorical"
+#   dx, dy    - grid spacing in degrees
+#   known_x, known_y  - reference pixel (usually 1.0)
+#   known_lat, known_lon - lat/lon of the reference pixel center
+#   tile_x, tile_y    - virtual tile size (for memory management chunking)
+#   tile_z    - number of vertical levels (1 for 2D fields)
+#
+# Optional keywords:
+#   tile_bdr      - border/halo pixels (default: 0)
+#   scale_factor  - post-read multiplication factor (default: 1.0)
+#   category_min, category_max - for categorical data
+#   missing_value - value to treat as missing
+#
+# Notes:
+#   - The NetCDF variable must be on a regular lat-lon grid
+#   - Dimensions should be ordered (y, x) for 2D or (z, y, x) for 3D
+#   - CF-convention scale_factor and add_offset attributes are applied automatically
+#   - _FillValue / missing_value attributes are handled (replaced with 0)
+#   - tile_x and tile_y control how much data is loaded at once (memory chunks);
+#     they do NOT need to correspond to physical file structure
+#
+# ============================================================================
+# Example: GMTED2010 terrain elevation from a single global NetCDF file
+# ============================================================================
+format = netcdf
+filename = gmted2010_30s.nc
+variable = elevation
+type = continuous
+projection = regular_ll
+dx = 0.00833333
+dy = 0.00833333
+known_x = 1.0
+known_y = 1.0
+known_lat = -89.99583
+known_lon = -179.99583
+tile_x = 1200
+tile_y = 1200
+tile_z = 1
+tile_bdr = 3
+scale_factor = 1.0

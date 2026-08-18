@@ -126,6 +126,9 @@ module mpas_parse_geoindex
          ! Strings
          !
          if (        trim(lhs) == 'type' &
+                .or. trim(lhs) == 'format' &
+                .or. trim(lhs) == 'filename' &
+                .or. trim(lhs) == 'variable' &
                 .or. trim(lhs) == 'projection' &
                 .or. trim(lhs) == 'units' &
                 .or. trim(lhs) == 'description' &
