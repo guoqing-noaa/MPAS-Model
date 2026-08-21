@@ -28,7 +28,7 @@ jobs:
     steps:
 
     - name: Checkout code (into ${driver_ROOT})
-      uses: actions/checkout@v3
+      uses: actions/checkout@v6
 
     - name: Initialize submodules
       run: |
@@ -37,11 +37,11 @@ jobs:
     - name: Install NetCDF library
       run: |
         sudo apt-get update
-        sudo apt-get install libnetcdff-dev
+        sudo apt-get install libnetcdff-dev liblapack-dev libblas-dev
 
     - name: Cache openmpi
       id: cache-openmpi
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: /home/runner/ompi-4.1.6
         key: cache-openmpi-${{matrix.fortran-compiler}}-key
@@ -64,7 +64,7 @@ jobs:
 
     - name: Cache GNU autotools
       id: cache-AUTOTOOLS
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: /home/runner/AUTOTOOLS
         key: cache-AUTOTOOLS-${{matrix.fortran-compiler}}-key
@@ -109,7 +109,7 @@ jobs:
 
     - name: Cache PnetCDF
       id: cache-pnetcdf
-      uses: actions/cache@v4
+      uses: actions/cache@v5
       with:
         path: /home/runner/PnetCDF
         key: cache-PnetCDF-${{matrix.fortran-compiler}}-key
@@ -137,6 +137,18 @@ jobs:
         echo "PNETCDF=${PNETCDF}" >> $GITHUB_ENV
         echo "LD_LIBRARY_PATH=${PNETCDF}/bin:$LD_LIBRARY_PATH" >> $GITHUB_ENV
         echo "PATH=${PNETCDF}/bin:$PATH" >> $GITHUB_ENV
+
+    - name: Setup NetCDF
+      run: |
+        NETCDF_DIR=/home/runner/NetCDF
+        mkdir -p ${NETCDF_DIR}/lib ${NETCDF_DIR}/include
+        for f in /usr/include/netcdf*.h /usr/include/netcdf*.inc /usr/include/netcdf*.mod; do
+          [ -e "$f" ] && ln -sf "$f" ${NETCDF_DIR}/include/ || true
+        done
+        for f in /usr/lib/x86_64-linux-gnu/libnetcdf*.so; do
+          [ -e "$f" ] && ln -sf "$f" ${NETCDF_DIR}/lib/ || true
+        done
+        echo "NETCDF=${NETCDF_DIR}" >> $GITHUB_ENV
 
 #    - name: Setup environment
 #      run: |
