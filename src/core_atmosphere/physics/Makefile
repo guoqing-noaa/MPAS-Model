@@ -247,6 +247,8 @@ mpas_atmphys_lsm_noahmpfinalize.o : \
 
 mpas_atmphys_manager.o: \
 	mpas_atmphys_constants.o \
+	mpas_atmphys_driver_microphysics.o \
+	mpas_atmphys_interface.o \
 	mpas_atmphys_o3climatology.o \
 	mpas_atmphys_update_surface.o \
 	mpas_atmphys_utilities.o \

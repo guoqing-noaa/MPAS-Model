@@ -2873,6 +2873,11 @@
                      description="time interval between updates of accumulated rain and radiation diagnostics"
                      possible_values="`DD_HH:MM:SS' or `none'"/>
 
+                <nml_option name="config_physics_diag_at_t0" type="logical" default_value=".true." in_defaults="true"
+                     units="-"
+                     description="If true, compute some physics diagnostics at t=0 (e.g. refl10cm, effective radii). No effect on restart runs."
+                     possible_values="`.true.' or `.false.'"/>
+
                 <nml_option name="config_physics_suite" type="character" default_value="mesoscale_reference" in_defaults="true"
                      units="-"
                      description="Choice of physics suite"

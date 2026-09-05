@@ -649,6 +649,10 @@ module atm_core
       use mpas_timer, only : mpas_timer_start, mpas_timer_stop
       use mpas_atm_boundaries, only : mpas_atm_update_bdy_tend
       use mpas_atm_diagnostics_manager, only : mpas_atm_diag_update, mpas_atm_diag_compute, mpas_atm_diag_reset
+#ifdef DO_PHYSICS
+      use mpas_atmphys_control, only : moist_physics
+      use mpas_atmphys_manager, only : physics_diag_at_t0
+#endif
    
       implicit none
    
@@ -659,6 +663,7 @@ module atm_core
       logical, pointer :: config_do_restart
       logical, pointer :: config_do_DAcycling
       logical, pointer :: config_apply_lbcs
+      logical, pointer :: config_physics_diag_at_t0
       type (block_type), pointer :: block_ptr
 
       type (MPAS_Time_Type) :: currTime
@@ -702,6 +707,17 @@ module atm_core
       end if
 
       call mpas_dmpar_get_time(diag_start_time)
+
+#ifdef DO_PHYSICS
+      ! compute physics diagnostics at t=0, State is snapshotted and restored inside.
+      call mpas_pool_get_config(domain % blocklist % configs, 'config_physics_diag_at_t0', &
+                                config_physics_diag_at_t0)
+      if (config_physics_diag_at_t0 .and. moist_physics .and. .not. config_do_restart) then
+         if (MPAS_stream_mgr_ringing_alarms(domain % streamManager, direction=MPAS_STREAM_OUTPUT, ierr=ierr)) then
+            call physics_diag_at_t0(domain)
+         end if
+      end if
+#endif
 
       if (MPAS_stream_mgr_ringing_alarms(domain % streamManager, direction=MPAS_STREAM_OUTPUT, ierr=ierr)) then
          block_ptr => domain % blocklist

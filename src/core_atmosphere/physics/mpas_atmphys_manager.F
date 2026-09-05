@@ -7,12 +7,15 @@
 !
 !=================================================================================================================
  module mpas_atmphys_manager
+ use mpas_derived_types, only : domain_type, block_type
  use mpas_kind_types
  use mpas_pool_routines
  use mpas_timekeeping
  use mpas_stream_manager
 
  use mpas_atmphys_constants
+ use mpas_atmphys_driver_microphysics, only : driver_microphysics
+ use mpas_atmphys_interface, only : pre_microphysics, post_microphysics
  use mpas_atmphys_vars
  use mpas_atmphys_o3climatology
  use mpas_atmphys_update_surface
@@ -20,7 +23,7 @@
 
  implicit none
  private
- public:: physics_timetracker,physics_run_init
+ public:: physics_timetracker,physics_run_init,physics_diag_at_t0
 
  integer, public:: year                 !Current year.
  integer, public:: month                !Current month.
@@ -825,6 +828,144 @@ if( trim(config_microp_scheme)=='mp_nssl2m' ) then
  call mpas_log_write(' ')
 
  end subroutine physics_run_init
+
+!=================================================================================================================
+ subroutine physics_diag_at_t0(domain)
+!=================================================================================================================
+! Run one microphysics pass at t=0. State hydrometeors, theta_m, and precip / tendency fields
+! that MUST match the initial condition are snapshotted before the call and restored
+! after, so the model integration remains bit-for-bit identical to a run without this pass.
+
+ type(domain_type),intent(inout):: domain
+
+ type(block_type),pointer     :: block
+ type(mpas_pool_type),pointer :: mesh, state, diag, diag_physics, tend, tend_physics
+
+ character(len=StrKIND),pointer :: config_microp_scheme
+
+ integer,pointer :: nThreads
+ integer,dimension(:),pointer :: cellSolveThreadStart, cellSolveThreadEnd
+
+ real(kind=RKIND),dimension(:,:,:),pointer :: scalars
+ real(kind=RKIND),dimension(:,:),pointer   :: theta_m
+ real(kind=RKIND),dimension(:,:),pointer   :: rainprod, evapprod
+ real(kind=RKIND),dimension(:,:),pointer   :: rt_diabatic_tend, dtheta_dt_mp
+ real(kind=RKIND),dimension(:),pointer     :: rainnc, rainc, snownc, graupelnc
+ real(kind=RKIND),dimension(:),pointer     :: rainncv, raincv, snowncv, graupelncv
+ real(kind=RKIND),dimension(:),pointer     :: sr, tend_sfc_pressure
+
+ real(kind=RKIND),dimension(:,:,:),allocatable :: sav_scalars
+ real(kind=RKIND),dimension(:,:),  allocatable :: sav_theta_m, sav_rainprod, sav_evapprod
+ real(kind=RKIND),dimension(:,:),  allocatable :: sav_rt_diabatic_tend, sav_dtheta_dt_mp
+ real(kind=RKIND),dimension(:),    allocatable :: sav_rainnc, sav_rainc
+ real(kind=RKIND),dimension(:),    allocatable :: sav_snownc, sav_graupelnc
+ real(kind=RKIND),dimension(:),    allocatable :: sav_rainncv, sav_raincv
+ real(kind=RKIND),dimension(:),    allocatable :: sav_snowncv, sav_graupelncv
+ real(kind=RKIND),dimension(:),    allocatable :: sav_sr, sav_tend_sfc_pressure
+ logical :: sav_l_diags
+ integer :: thread
+
+ block => domain % blocklist
+ do while (associated(block))
+
+    call mpas_pool_get_config(block % configs, 'config_microp_scheme', config_microp_scheme)
+    if (trim(config_microp_scheme) == 'off') then
+       block => block % next
+       cycle
+    end if
+
+    call mpas_pool_get_subpool(block % structs, 'mesh'        , mesh        )
+    call mpas_pool_get_subpool(block % structs, 'state'       , state       )
+    call mpas_pool_get_subpool(block % structs, 'diag'        , diag        )
+    call mpas_pool_get_subpool(block % structs, 'diag_physics', diag_physics)
+    call mpas_pool_get_subpool(block % structs, 'tend'        , tend        )
+    call mpas_pool_get_subpool(block % structs, 'tend_physics', tend_physics)
+
+    call mpas_pool_get_array(state, 'scalars', scalars, 1)
+    call mpas_pool_get_array(state, 'theta_m', theta_m, 1)
+
+    call mpas_pool_get_array(diag,         'dtheta_dt_mp'    , dtheta_dt_mp    )
+    call mpas_pool_get_array(tend,         'rt_diabatic_tend', rt_diabatic_tend)
+    call mpas_pool_get_array(tend,         'tend_sfc_pressure', tend_sfc_pressure)
+    call mpas_pool_get_array(diag_physics, 'rainnc'    , rainnc    )
+    call mpas_pool_get_array(diag_physics, 'rainc'     , rainc     )
+    call mpas_pool_get_array(diag_physics, 'snownc'    , snownc    )
+    call mpas_pool_get_array(diag_physics, 'graupelnc' , graupelnc )
+    call mpas_pool_get_array(diag_physics, 'rainncv'   , rainncv   )
+    call mpas_pool_get_array(diag_physics, 'raincv'    , raincv    )
+    call mpas_pool_get_array(diag_physics, 'snowncv'   , snowncv   )
+    call mpas_pool_get_array(diag_physics, 'graupelncv', graupelncv)
+    call mpas_pool_get_array(diag_physics, 'sr'        , sr        )
+    call mpas_pool_get_array(diag_physics, 'rainprod'  , rainprod  )
+    call mpas_pool_get_array(diag_physics, 'evapprod'  , evapprod  )
+
+    allocate(sav_scalars(size(scalars,1), size(scalars,2), size(scalars,3)))
+    allocate(sav_theta_m(size(theta_m,1), size(theta_m,2)))
+    allocate(sav_dtheta_dt_mp(size(dtheta_dt_mp,1), size(dtheta_dt_mp,2)))
+    allocate(sav_rt_diabatic_tend(size(rt_diabatic_tend,1), size(rt_diabatic_tend,2)))
+    allocate(sav_rainprod(size(rainprod,1), size(rainprod,2)))
+    allocate(sav_evapprod(size(evapprod,1), size(evapprod,2)))
+    allocate(sav_rainnc(size(rainnc))     , sav_rainc(size(rainc))     )
+    allocate(sav_snownc(size(snownc))     , sav_graupelnc(size(graupelnc)))
+    allocate(sav_rainncv(size(rainncv))   , sav_raincv(size(raincv))   )
+    allocate(sav_snowncv(size(snowncv))   , sav_graupelncv(size(graupelncv)))
+    allocate(sav_sr(size(sr))             , sav_tend_sfc_pressure(size(tend_sfc_pressure)))
+
+    sav_scalars          = scalars
+    sav_theta_m          = theta_m
+    sav_dtheta_dt_mp     = dtheta_dt_mp
+    sav_rt_diabatic_tend = rt_diabatic_tend
+    sav_rainprod         = rainprod
+    sav_evapprod         = evapprod
+    sav_rainnc     = rainnc     ; sav_rainc      = rainc
+    sav_snownc     = snownc     ; sav_graupelnc  = graupelnc
+    sav_rainncv    = rainncv    ; sav_raincv     = raincv
+    sav_snowncv    = snowncv    ; sav_graupelncv = graupelncv
+    sav_sr         = sr         ; sav_tend_sfc_pressure = tend_sfc_pressure
+
+    sav_l_diags = l_diags
+    l_diags = .true.
+
+    call mpas_pool_get_dimension(block % dimensions, 'nThreads'            , nThreads            )
+    call mpas_pool_get_dimension(block % dimensions, 'cellSolveThreadStart', cellSolveThreadStart)
+    call mpas_pool_get_dimension(block % dimensions, 'cellSolveThreadEnd'  , cellSolveThreadEnd  )
+
+    call pre_microphysics(block % configs, state, diag, 1)
+
+!$OMP PARALLEL DO
+    do thread = 1, nThreads
+       call driver_microphysics(block % configs, mesh, state, 1, diag, diag_physics, &
+                                tend_physics, tend, 1, &
+                                cellSolveThreadStart(thread), cellSolveThreadEnd(thread))
+    end do
+!$OMP END PARALLEL DO
+
+    call post_microphysics(block % configs, state, diag, tend, 1)
+
+    scalars          = sav_scalars
+    theta_m          = sav_theta_m
+    dtheta_dt_mp     = sav_dtheta_dt_mp
+    rt_diabatic_tend = sav_rt_diabatic_tend
+    rainprod         = sav_rainprod
+    evapprod         = sav_evapprod
+    rainnc     = sav_rainnc     ; rainc      = sav_rainc
+    snownc     = sav_snownc     ; graupelnc  = sav_graupelnc
+    rainncv    = sav_rainncv    ; raincv     = sav_raincv
+    snowncv    = sav_snowncv    ; graupelncv = sav_graupelncv
+    sr         = sav_sr         ; tend_sfc_pressure = sav_tend_sfc_pressure
+
+    l_diags = sav_l_diags
+
+    deallocate(sav_scalars, sav_theta_m, sav_dtheta_dt_mp, sav_rt_diabatic_tend)
+    deallocate(sav_rainprod, sav_evapprod)
+    deallocate(sav_rainnc, sav_rainc, sav_snownc, sav_graupelnc)
+    deallocate(sav_rainncv, sav_raincv, sav_snowncv, sav_graupelncv)
+    deallocate(sav_sr, sav_tend_sfc_pressure)
+
+    block => block % next
+ end do
+
+ end subroutine physics_diag_at_t0
 
 !=================================================================================================================
  end module mpas_atmphys_manager
